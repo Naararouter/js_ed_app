@@ -34,7 +34,10 @@ const resources = {
         instructions:
           "В этом режиме нет подсказок: выделите весь код и присвойте каждому фрагменту подходящую категорию.",
         complete: "Отлично! Весь код покрыт выделениями.",
+        partial: "Достигнут проходной порог.",
         incomplete: "Покройте весь код, чтобы завершить задачу.",
+        categories: "Категории в покрытии",
+        threshold: "Минимум для прохождения: {{value}}%",
       },
       tasks: {
         s1: "S1 — базовое",
@@ -61,7 +64,7 @@ const resources = {
         item1:
           "Выбирайте режим выше — можно тренироваться на выражениях, идентификаторах, операторах, ключевых словах, определениях и вызовах функций, ключах объектов и литералах.",
         item2:
-          "Следите за правильностью категории: в свободном режиме подсветка не помогает.",
+          "В свободном режиме вручную выберите категории, которые хотите проверять.",
         item3: "Подсказка добавляет следующее неотмеченное выражение.",
         item4:
           "Ловушка: <0>if (...) { ... }</0> — оператор, а не выражение; зато <1>doIt()</1> внутри — выражение.",
@@ -107,7 +110,10 @@ const resources = {
         instructions:
           "No hints here: cover the whole snippet and tag every fragment with the right category.",
         complete: "Great! The entire snippet is covered.",
+        partial: "Pass threshold reached.",
         incomplete: "Cover the whole snippet to finish the task.",
+        categories: "Categories in coverage",
+        threshold: "Pass threshold: {{value}}%",
       },
       tasks: {
         s1: "S1 — basics",
@@ -134,7 +140,7 @@ const resources = {
         item1:
           "Pick a mode above to practise expressions, identifiers, operators, keywords, function definitions and calls, object keys, or literals.",
         item2:
-          "In free mode there is no highlighting help — make sure the category fits.",
+          "In free mode select which categories should count toward coverage.",
         item3: "The hint adds the next missing expression.",
         item4:
           "Watch out: <0>if (...) { ... }</0> is a statement, not an expression; but <1>doIt()</1> inside is an expression.",

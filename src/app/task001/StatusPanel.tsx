@@ -13,6 +13,8 @@ type StatusPanelProps = {
   codeText: string;
   mode: HighlightMode;
   coverage: number | null;
+  passThreshold: number;
+  passed: boolean;
   onRemove: (index: number) => void;
 };
 
@@ -22,6 +24,8 @@ export function StatusPanel({
   codeText,
   mode,
   coverage,
+  passThreshold,
+  passed,
   onRemove,
 }: StatusPanelProps) {
   const { t } = useTranslation("task001");
@@ -58,6 +62,22 @@ export function StatusPanel({
             <span className="font-medium">
               {coveragePercent != null ? `${coveragePercent}%` : "0%"}
             </span>
+          </div>
+        )}
+        {mode === "free" && (
+          <div className="space-y-1">
+            <div className={`text-sm ${passed ? "text-emerald-600" : "text-amber-600"}`}>
+              {coverage != null && coverage >= 1
+                ? t("freeMode.complete")
+                : passed
+                ? t("freeMode.partial")
+                : t("freeMode.incomplete")}
+            </div>
+            <div className="text-xs text-neutral-500">
+              {t("freeMode.threshold", {
+                value: Math.round(passThreshold * 100),
+              })}
+            </div>
           </div>
         )}
         <div className="pt-2 border-t">

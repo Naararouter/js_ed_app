@@ -200,6 +200,7 @@ const operatorLabelSet = new Set([
   "**",
   "++",
   "--",
+  ".",
   "=",
   "+=",
   "-=",

@@ -23,7 +23,9 @@ type ControlsCardProps = {
   codeText: string;
   tasks: Record<string, string>;
   freeLabel: FreeLabel;
+  activeCategories: FreeLabel[];
   onFreeLabelChange: (label: FreeLabel) => void;
+  onToggleCategory: (label: FreeLabel) => void;
   onModeChange: (mode: HighlightMode) => void;
   onTaskSelect: (taskKey: string) => void;
   onAddSelection: () => void;
@@ -38,7 +40,9 @@ export function ControlsCard({
   codeText,
   tasks,
   freeLabel,
+  activeCategories,
   onFreeLabelChange,
+  onToggleCategory,
   onModeChange,
   onTaskSelect,
   onAddSelection,
@@ -48,6 +52,10 @@ export function ControlsCard({
   onMount,
 }: ControlsCardProps) {
   const { t, i18n } = useTranslation("task001");
+
+  const selectableCategories = activeCategories.length
+    ? activeCategories
+    : FREE_LABEL_OPTIONS;
 
   return (
     <Card className="shadow-sm">
@@ -100,22 +108,48 @@ export function ControlsCard({
           ))}
         </div>
         {mode === "free" && (
-          <div className="flex flex-wrap items-center gap-3 pt-1">
-            <span className="text-sm text-neutral-500">{t("freeMode.currentLabel")}:</span>
-            <select
-              value={freeLabel}
-              onChange={(event) =>
-                onFreeLabelChange(event.target.value as FreeLabel)
-              }
-              className="rounded-md border border-neutral-300 bg-white px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
-            >
-              {FREE_LABEL_OPTIONS.map((option) => (
-                <option key={option} value={option}>
-                  {t(MODE_CONFIG[option].labelKey)}
-                </option>
-              ))}
-            </select>
-            <span className="text-sm text-neutral-500">{t("freeMode.instructions")}</span>
+          <div className="space-y-2 pt-1">
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="text-sm text-neutral-500">
+                {t("freeMode.categories")}:
+              </span>
+              <div className="flex flex-wrap gap-2">
+                {FREE_LABEL_OPTIONS.map((option) => {
+                  const selected = activeCategories.includes(option);
+                  const disableToggle = selected && activeCategories.length === 1;
+                  return (
+                    <Button
+                      key={option}
+                      size="sm"
+                      variant={selected ? "default" : "outline"}
+                      disabled={disableToggle}
+                      onClick={() => onToggleCategory(option)}
+                    >
+                      {t(MODE_CONFIG[option].labelKey)}
+                    </Button>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="text-sm text-neutral-500">{t("freeMode.currentLabel")}:</span>
+              <select
+                value={freeLabel}
+                onChange={(event) =>
+                  onFreeLabelChange(event.target.value as FreeLabel)
+                }
+                className="rounded-md border border-neutral-300 bg-white px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+              >
+                {selectableCategories.map((option) => (
+                  <option key={option} value={option}>
+                    {t(MODE_CONFIG[option].labelKey)}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="text-sm text-neutral-500">
+              {t("freeMode.instructions")}
+            </div>
           </div>
         )}
       </CardHeader>

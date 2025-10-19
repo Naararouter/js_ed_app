@@ -29,6 +29,8 @@ type ReportTabsProps = {
   mode: HighlightMode;
   coverage: number | null;
   userSpans: Span[];
+  passThreshold: number;
+  passed: boolean;
 };
 
 const formatPercent = (value: number | null) =>
@@ -46,6 +48,8 @@ export function ReportTabs({
   mode,
   coverage,
   userSpans,
+  passThreshold,
+  passed,
 }: ReportTabsProps) {
   const { t } = useTranslation("task001");
 
@@ -112,10 +116,17 @@ export function ReportTabs({
                 <div className="text-neutral-700">
                   {t("freeMode.coverage")}: <b>{formatPercent(coverage)}</b>
                 </div>
-                <div className="text-neutral-600">
+                <div className={passed ? "text-emerald-600" : "text-amber-600"}>
                   {coverage != null && coverage >= 1
                     ? t("freeMode.complete")
+                    : passed
+                    ? t("freeMode.partial")
                     : t("freeMode.incomplete")}
+                </div>
+                <div className="text-sm text-neutral-600">
+                  {t("freeMode.threshold", {
+                    value: Math.round(passThreshold * 100),
+                  })}
                 </div>
                 {result ? (
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2">

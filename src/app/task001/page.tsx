@@ -21,6 +21,7 @@ import type { Result } from "./types";
 
 const TAB_TASK = "task";
 const TAB_REPORT = "report";
+const FREE_MODE_PASS_THRESHOLD = 0.95;
 
 function getUnionLength(spans: Span[]): number {
   if (spans.length === 0) return 0;
@@ -66,10 +67,14 @@ export default function Page() {
   const [activeTab, setActiveTab] = useState(TAB_TASK);
   const [freeLabel, setFreeLabel] = useState<FreeLabel>(FREE_LABEL_OPTIONS[0]);
   const [coverage, setCoverage] = useState<number | null>(null);
+  const [freePassed, setFreePassed] = useState(false);
+  const [activeCategories, setActiveCategories] = useState<FreeLabel[]>(
+    FREE_LABEL_OPTIONS
+  );
 
   const freeTargets = useMemo(() => {
     const map = new Map<string, { span: Span; label: FreeLabel }>();
-    for (const label of FREE_LABEL_OPTIONS) {
+    for (const label of activeCategories) {
       const spans = collectSpans(codeText, label);
       for (const span of spans) {
         const key = spanKey(span);
@@ -79,7 +84,7 @@ export default function Page() {
       }
     }
     return map;
-  }, [codeText]);
+  }, [codeText, activeCategories]);
 
   const freeTargetSpanList = useMemo(
     () => Array.from(freeTargets.values()).map((entry) => entry.span),
@@ -98,6 +103,7 @@ export default function Page() {
       setResult(null);
       setUserSpans([]);
       setCoverage(null);
+      setFreePassed(false);
       setActiveTab(TAB_TASK);
     } catch (error) {
       console.error(error);
@@ -105,9 +111,23 @@ export default function Page() {
       setResult(null);
       setUserSpans([]);
       setCoverage(null);
+      setFreePassed(false);
       setActiveTab(TAB_TASK);
     }
   }, [codeText, mode]);
+
+  useEffect(() => {
+    setFreeLabel((current) =>
+      activeCategories.includes(current)
+        ? current
+        : activeCategories[0] ?? FREE_LABEL_OPTIONS[0]
+    );
+    setUserSpans([]);
+    setResult(null);
+    setCoverage(null);
+    setFreePassed(false);
+    setActiveTab(TAB_TASK);
+  }, [activeCategories]);
 
   useEffect(() => {
     const editor = editorRef.current;
@@ -166,18 +186,21 @@ export default function Page() {
     );
     setResult(null);
     setCoverage(null);
+    setFreePassed(false);
   };
 
   const clearUser = () => {
     setUserSpans([]);
     setResult(null);
     setCoverage(null);
+    setFreePassed(false);
   };
 
   const removeSelection = (index: number) => {
     setUserSpans((prev) => prev.filter((_, idx) => idx !== index));
     setResult(null);
     setCoverage(null);
+    setFreePassed(false);
   };
 
   const check = () => {
@@ -211,6 +234,7 @@ export default function Page() {
           : getUnionLength(correctCoverageSpans) / freeTargetLength;
       setCoverage(ratio);
       setResult({ tp, fp, fn });
+      setFreePassed(ratio >= FREE_MODE_PASS_THRESHOLD);
       setActiveTab(TAB_REPORT);
       return;
     }
@@ -234,6 +258,7 @@ export default function Page() {
     }
 
     setResult({ tp, fp, fn });
+    setFreePassed(false);
     setActiveTab(TAB_REPORT);
   };
 
@@ -264,11 +289,14 @@ export default function Page() {
   const liveCoverage = useMemo(() => {
     if (mode !== "free") return null;
     if (freeTargetLength === 0) return 1;
-    const correctSpans = userSpans.filter((span) => {
+    const matched: Span[] = [];
+    for (const span of userSpans) {
       const target = freeTargets.get(spanKey(span));
-      return target && target.label === span.kind;
-    });
-    return getUnionLength(correctSpans) / freeTargetLength;
+      if (target && target.label === span.kind) {
+        matched.push(target.span);
+      }
+    }
+    return getUnionLength(matched) / freeTargetLength;
   }, [mode, userSpans, freeTargets, freeTargetLength]);
 
   const score = useMemo(() => {
@@ -291,6 +319,7 @@ export default function Page() {
     setUserSpans([]);
     setResult(null);
     setCoverage(null);
+    setFreePassed(false);
   };
 
   const handleTaskSelect = (taskKey: string) => {
@@ -298,6 +327,23 @@ export default function Page() {
     setUserSpans([]);
     setResult(null);
     setCoverage(null);
+    setFreePassed(false);
+  };
+
+  const toggleCategory = (label: FreeLabel) => {
+    setActiveCategories((prev) => {
+      if (prev.includes(label)) {
+        if (prev.length === 1) return prev;
+        const next = prev.filter((item) => item !== label);
+        return next.length ? next : prev;
+      }
+      const next = [...prev, label];
+      next.sort(
+        (a, b) =>
+          FREE_LABEL_OPTIONS.indexOf(a) - FREE_LABEL_OPTIONS.indexOf(b)
+      );
+      return next;
+    });
   };
 
   return (
@@ -308,6 +354,8 @@ export default function Page() {
           codeText={codeText}
           tasks={TASKS}
           freeLabel={freeLabel}
+          activeCategories={activeCategories}
+          onToggleCategory={toggleCategory}
           onFreeLabelChange={setFreeLabel}
           onModeChange={handleModeChange}
           onTaskSelect={handleTaskSelect}
@@ -326,6 +374,8 @@ export default function Page() {
           codeText={codeText}
           mode={mode}
           coverage={mode === "free" ? coverage ?? liveCoverage : null}
+          passThreshold={FREE_MODE_PASS_THRESHOLD}
+          passed={freePassed}
           onRemove={removeSelection}
         />
 
@@ -341,6 +391,8 @@ export default function Page() {
           mode={mode}
           coverage={mode === "free" ? coverage ?? liveCoverage : null}
           userSpans={userSpans}
+          passThreshold={FREE_MODE_PASS_THRESHOLD}
+          passed={freePassed}
         />
       </div>
     </div>
