@@ -8,13 +8,51 @@ import { ControlsCard } from "./ControlsCard";
 import { StatusPanel } from "./StatusPanel";
 import { ReportTabs } from "./ReportTabs";
 import { TASKS } from "./tasks";
-import { collectSpans, type HighlightMode, type Span } from "./highlight";
+import {
+  collectSpans,
+  type HighlightMode,
+  type Span,
+  type FreeLabel,
+  FREE_LABEL_OPTIONS,
+} from "./highlight";
 import { toMonacoRange, type MonacoDecoration, type MonacoEditor } from "./monaco";
 import { rangesEqual, spanKey } from "./span-utils";
 import type { Result } from "./types";
 
 const TAB_TASK = "task";
 const TAB_REPORT = "report";
+
+function getUnionLength(spans: Span[]): number {
+  if (spans.length === 0) return 0;
+  const sorted = [...spans].sort((a, b) => a.start - b.start || a.end - b.end);
+  let covered = 0;
+  let currentStart: number | null = null;
+  let currentEnd = 0;
+
+  for (const span of sorted) {
+    const start = Math.min(span.start, span.end);
+    const end = Math.max(span.start, span.end);
+    if (end <= start) continue;
+    if (currentStart == null) {
+      currentStart = start;
+      currentEnd = end;
+      continue;
+    }
+    if (start <= currentEnd) {
+      currentEnd = Math.max(currentEnd, end);
+    } else {
+      covered += currentEnd - currentStart;
+      currentStart = start;
+      currentEnd = end;
+    }
+  }
+
+  if (currentStart != null) {
+    covered += currentEnd - currentStart;
+  }
+
+  return covered;
+}
 
 export default function Page() {
   const editorRef = useRef<MonacoEditor | null>(null);
@@ -26,16 +64,48 @@ export default function Page() {
   const [userSpans, setUserSpans] = useState<Span[]>([]);
   const [result, setResult] = useState<Result | null>(null);
   const [activeTab, setActiveTab] = useState(TAB_TASK);
+  const [freeLabel, setFreeLabel] = useState<FreeLabel>(FREE_LABEL_OPTIONS[0]);
+  const [coverage, setCoverage] = useState<number | null>(null);
+
+  const freeTargets = useMemo(() => {
+    const map = new Map<string, { span: Span; label: FreeLabel }>();
+    for (const label of FREE_LABEL_OPTIONS) {
+      const spans = collectSpans(codeText, label);
+      for (const span of spans) {
+        const key = spanKey(span);
+        if (!map.has(key)) {
+          map.set(key, { span, label });
+        }
+      }
+    }
+    return map;
+  }, [codeText]);
+
+  const freeTargetSpanList = useMemo(
+    () => Array.from(freeTargets.values()).map((entry) => entry.span),
+    [freeTargets]
+  );
+
+  const freeTargetLength = useMemo(
+    () => getUnionLength(freeTargetSpanList),
+    [freeTargetSpanList]
+  );
 
   useEffect(() => {
     try {
       const spans = collectSpans(codeText, mode);
       setGroundTruth(spans);
       setResult(null);
+      setUserSpans([]);
+      setCoverage(null);
+      setActiveTab(TAB_TASK);
     } catch (error) {
       console.error(error);
       setGroundTruth([]);
       setResult(null);
+      setUserSpans([]);
+      setCoverage(null);
+      setActiveTab(TAB_TASK);
     }
   }, [codeText, mode]);
 
@@ -90,22 +160,61 @@ export default function Page() {
     });
     if (end <= start) return;
 
-    const span: Span = { start, end, kind: "User" };
+    const span: Span = { start, end, kind: mode === "free" ? freeLabel : "User" };
     setUserSpans((prev) =>
       prev.some((item) => rangesEqual(item, span)) ? prev : [...prev, span]
     );
+    setResult(null);
+    setCoverage(null);
   };
 
   const clearUser = () => {
     setUserSpans([]);
     setResult(null);
+    setCoverage(null);
   };
 
   const removeSelection = (index: number) => {
     setUserSpans((prev) => prev.filter((_, idx) => idx !== index));
+    setResult(null);
+    setCoverage(null);
   };
 
   const check = () => {
+    if (mode === "free") {
+      const tp: Span[] = [];
+      const fp: Span[] = [];
+      const fn: Span[] = [];
+      const matchedKeys = new Set<string>();
+      const correctCoverageSpans: Span[] = [];
+
+      for (const span of userSpans) {
+        const target = freeTargets.get(spanKey(span));
+        if (target && target.label === span.kind) {
+          tp.push(span);
+          matchedKeys.add(spanKey(span));
+          correctCoverageSpans.push(target.span);
+        } else {
+          fp.push(span);
+        }
+      }
+
+      for (const [key, target] of freeTargets) {
+        if (!matchedKeys.has(key)) {
+          fn.push({ ...target.span, kind: target.label });
+        }
+      }
+
+      const ratio =
+        freeTargetLength === 0
+          ? 1
+          : getUnionLength(correctCoverageSpans) / freeTargetLength;
+      setCoverage(ratio);
+      setResult({ tp, fp, fn });
+      setActiveTab(TAB_REPORT);
+      return;
+    }
+
     const gt = new Map(groundTruth.map((span) => [spanKey(span), span]));
     const user = new Map(userSpans.map((span) => [spanKey(span), span]));
 
@@ -129,6 +238,7 @@ export default function Page() {
   };
 
   const hintOne = () => {
+    if (mode === "free") return;
     const next = groundTruth.find(
       (span) => !userSpans.some((item) => rangesEqual(item, span))
     );
@@ -151,8 +261,18 @@ export default function Page() {
     editor.focus();
   };
 
+  const liveCoverage = useMemo(() => {
+    if (mode !== "free") return null;
+    if (freeTargetLength === 0) return 1;
+    const correctSpans = userSpans.filter((span) => {
+      const target = freeTargets.get(spanKey(span));
+      return target && target.label === span.kind;
+    });
+    return getUnionLength(correctSpans) / freeTargetLength;
+  }, [mode, userSpans, freeTargets, freeTargetLength]);
+
   const score = useMemo(() => {
-    if (!result) return null;
+    if (mode === "free" || !result) return null;
     const raw = result.tp.length - 0.5 * result.fp.length;
     return {
       raw,
@@ -161,18 +281,23 @@ export default function Page() {
       fp: result.fp.length,
       fn: result.fn.length,
     };
-  }, [result, groundTruth.length]);
+  }, [mode, result, groundTruth.length]);
 
   const handleModeChange = (nextMode: HighlightMode) => {
     setMode(nextMode);
+    if (nextMode !== "free") {
+      setFreeLabel(FREE_LABEL_OPTIONS[0]);
+    }
     setUserSpans([]);
     setResult(null);
+    setCoverage(null);
   };
 
   const handleTaskSelect = (taskKey: string) => {
     setCodeText(TASKS[taskKey]);
     setUserSpans([]);
     setResult(null);
+    setCoverage(null);
   };
 
   return (
@@ -182,6 +307,8 @@ export default function Page() {
           mode={mode}
           codeText={codeText}
           tasks={TASKS}
+          freeLabel={freeLabel}
+          onFreeLabelChange={setFreeLabel}
           onModeChange={handleModeChange}
           onTaskSelect={handleTaskSelect}
           onAddSelection={addSelection}
@@ -197,6 +324,8 @@ export default function Page() {
           groundTruthCount={groundTruth.length}
           userSpans={userSpans}
           codeText={codeText}
+          mode={mode}
+          coverage={mode === "free" ? coverage ?? liveCoverage : null}
           onRemove={removeSelection}
         />
 
@@ -209,6 +338,9 @@ export default function Page() {
           score={score}
           codeText={codeText}
           onSpanClick={highlightRange}
+          mode={mode}
+          coverage={mode === "free" ? coverage ?? liveCoverage : null}
+          userSpans={userSpans}
         />
       </div>
     </div>

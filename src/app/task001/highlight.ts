@@ -6,6 +6,7 @@ import type { ParserPlugin } from "@babel/parser";
 export type Span = { start: number; end: number; kind: string };
 
 export type HighlightMode =
+  | "free"
   | "expressions"
   | "identifiers"
   | "operators"
@@ -49,6 +50,7 @@ const isBigIntLiteral = (node: t.Node): node is t.BigIntLiteral =>
     : false;
 
 export const MODE_CONFIG: Record<HighlightMode, ModeConfig> = {
+  free: { labelKey: "modes.free" },
   expressions: { labelKey: "modes.expressions" },
   identifiers: { labelKey: "modes.identifiers" },
   operators: { labelKey: "modes.operators" },
@@ -68,6 +70,19 @@ export const MODE_ORDER: HighlightMode[] = [
   "functionCalls",
   "objectKeys",
   "literals",
+  "free",
+];
+
+export type FreeLabel = Exclude<HighlightMode, "free">;
+export const FREE_LABEL_OPTIONS: FreeLabel[] = [
+  "identifiers",
+  "keywords",
+  "operators",
+  "literals",
+  "functionDefinitions",
+  "functionCalls",
+  "objectKeys",
+  "expressions",
 ];
 
 const isOptionalCallExpression = (
@@ -89,6 +104,9 @@ export function collectSpans(
   const outermostOnly = Boolean(options.outermostOnly);
 
   switch (mode) {
+    case "free":
+      spans = [];
+      break;
     case "expressions":
       spans = collectExpressionSpans(ast, outermostOnly);
       break;

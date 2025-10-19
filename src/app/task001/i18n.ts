@@ -18,6 +18,7 @@ const resources = {
         en: "Англ",
       },
       modes: {
+        free: "Свободный режим",
         expressions: "Выражения",
         identifiers: "Идентификаторы",
         operators: "Операторы",
@@ -26,6 +27,14 @@ const resources = {
         functionCalls: "Вызовы функций",
         objectKeys: "Ключи объекта",
         literals: "Литералы",
+      },
+      freeMode: {
+        currentLabel: "Категория",
+        coverage: "Покрытие",
+        instructions:
+          "В этом режиме нет подсказок: выделите весь код и присвойте каждому фрагменту подходящую категорию.",
+        complete: "Отлично! Весь код покрыт выделениями.",
+        incomplete: "Покройте весь код, чтобы завершить задачу.",
       },
       tasks: {
         s1: "S1 — базовое",
@@ -52,7 +61,7 @@ const resources = {
         item1:
           "Выбирайте режим выше — можно тренироваться на выражениях, идентификаторах, операторах, ключевых словах, определениях и вызовах функций, ключах объектов и литералах.",
         item2:
-          "«Только внешние» режим был отключён — теперь показываются все выражения.",
+          "Следите за правильностью категории: в свободном режиме подсветка не помогает.",
         item3: "Подсказка добавляет следующее неотмеченное выражение.",
         item4:
           "Ловушка: <0>if (...) { ... }</0> — оператор, а не выражение; зато <1>doIt()</1> внутри — выражение.",
@@ -82,6 +91,7 @@ const resources = {
         en: "EN",
       },
       modes: {
+        free: "Free mode",
         expressions: "Expressions",
         identifiers: "Identifiers",
         operators: "Operators",
@@ -90,6 +100,14 @@ const resources = {
         functionCalls: "Function calls",
         objectKeys: "Object keys",
         literals: "Literals",
+      },
+      freeMode: {
+        currentLabel: "Category",
+        coverage: "Coverage",
+        instructions:
+          "No hints here: cover the whole snippet and tag every fragment with the right category.",
+        complete: "Great! The entire snippet is covered.",
+        incomplete: "Cover the whole snippet to finish the task.",
       },
       tasks: {
         s1: "S1 — basics",
@@ -116,7 +134,7 @@ const resources = {
         item1:
           "Pick a mode above to practise expressions, identifiers, operators, keywords, function definitions and calls, object keys, or literals.",
         item2:
-          "Outer-only highlighting is disabled now — we show all expressions.",
+          "In free mode there is no highlighting help — make sure the category fits.",
         item3: "The hint adds the next missing expression.",
         item4:
           "Watch out: <0>if (...) { ... }</0> is a statement, not an expression; but <1>doIt()</1> inside is an expression.",

@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CheckCircle2, Target, XCircle } from "lucide-react";
 
-import type { Span } from "./highlight";
+import { MODE_CONFIG, type HighlightMode, type Span } from "./highlight";
 import { formatSnippet } from "./span-utils";
 import type { Result } from "./types";
 
@@ -26,7 +26,13 @@ type ReportTabsProps = {
   score: Score | null;
   codeText: string;
   onSpanClick: (span: Span) => void;
+  mode: HighlightMode;
+  coverage: number | null;
+  userSpans: Span[];
 };
+
+const formatPercent = (value: number | null) =>
+  value != null ? `${Math.round(value * 100)}%` : "0%";
 
 export function ReportTabs({
   activeTab,
@@ -37,6 +43,9 @@ export function ReportTabs({
   score,
   codeText,
   onSpanClick,
+  mode,
+  coverage,
+  userSpans,
 }: ReportTabsProps) {
   const { t } = useTranslation("task001");
 
@@ -49,7 +58,13 @@ export function ReportTabs({
           className="cursor-pointer hover:bg-amber-50 rounded px-1"
         >
           <code>{formatSnippet(codeText, span.start, span.end)}</code>
-          <span className="text-neutral-500 ml-1">({span.kind})</span>
+          <span className="text-neutral-500 ml-1">
+            (
+            {mode === "free" && MODE_CONFIG[span.kind as HighlightMode]
+              ? t(MODE_CONFIG[span.kind as HighlightMode].labelKey)
+              : span.kind}
+            )
+          </span>
         </li>
       ))
     ) : (
@@ -79,6 +94,7 @@ export function ReportTabs({
                   components={[<code key="code-0" />, <code key="code-1" />]}
                 />
               </li>
+              {mode === "free" && <li>{t("freeMode.instructions")}</li>}
             </ul>
           </CardContent>
         </Card>
@@ -86,10 +102,47 @@ export function ReportTabs({
       <TabsContent value={reportTabId}>
         <Card className="shadow-sm">
           <CardHeader>
-            <CardTitle>{t("report.title")}</CardTitle>
+            <CardTitle>
+              {mode === "free" ? t("freeMode.coverage") : t("report.title")}
+            </CardTitle>
           </CardHeader>
           <CardContent className="space-y-2 text-sm">
-            {result ? (
+            {mode === "free" ? (
+              <div className="space-y-3">
+                <div className="text-neutral-700">
+                  {t("freeMode.coverage")}: <b>{formatPercent(coverage)}</b>
+                </div>
+                <div className="text-neutral-600">
+                  {coverage != null && coverage >= 1
+                    ? t("freeMode.complete")
+                    : t("freeMode.incomplete")}
+                </div>
+                {result ? (
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2">
+                    <div>
+                      <div className="font-medium mb-1">{t("report.correct")}</div>
+                      <ul className="text-neutral-700 max-h-36 overflow-auto space-y-1">
+                        {renderSpanList(result.tp)}
+                      </ul>
+                    </div>
+                    <div>
+                      <div className="font-medium mb-1">{t("report.extra")}</div>
+                      <ul className="text-neutral-700 max-h-36 overflow-auto space-y-1">
+                        {renderSpanList(result.fp)}
+                      </ul>
+                    </div>
+                    <div>
+                      <div className="font-medium mb-1">{t("report.missed")}</div>
+                      <ul className="text-neutral-700 max-h-36 overflow-auto space-y-1">
+                        {renderSpanList(result.fn)}
+                      </ul>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-neutral-500">{t("report.noData")}</div>
+                )}
+              </div>
+            ) : result ? (
               <div className="space-y-2">
                 <div className="flex flex-wrap gap-3 text-base">
                   <span className="flex items-center gap-1">

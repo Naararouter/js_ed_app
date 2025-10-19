@@ -6,7 +6,13 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Code2, Info, Target, CheckCircle2 } from "lucide-react";
 
-import { MODE_CONFIG, MODE_ORDER, type HighlightMode } from "./highlight";
+import {
+  MODE_CONFIG,
+  MODE_ORDER,
+  type FreeLabel,
+  type HighlightMode,
+  FREE_LABEL_OPTIONS,
+} from "./highlight";
 import type { MonacoEditor } from "./monaco";
 import { TASK_LABEL_KEYS } from "./tasks";
 
@@ -16,6 +22,8 @@ type ControlsCardProps = {
   mode: HighlightMode;
   codeText: string;
   tasks: Record<string, string>;
+  freeLabel: FreeLabel;
+  onFreeLabelChange: (label: FreeLabel) => void;
   onModeChange: (mode: HighlightMode) => void;
   onTaskSelect: (taskKey: string) => void;
   onAddSelection: () => void;
@@ -29,6 +37,8 @@ export function ControlsCard({
   mode,
   codeText,
   tasks,
+  freeLabel,
+  onFreeLabelChange,
   onModeChange,
   onTaskSelect,
   onAddSelection,
@@ -63,9 +73,11 @@ export function ControlsCard({
                 </Button>
               ))}
             </div>
-            <Button variant="secondary" onClick={onHint}>
-              {t("hint")}
-            </Button>
+            {mode !== "free" && (
+              <Button variant="secondary" onClick={onHint}>
+                {t("hint")}
+              </Button>
+            )}
             <Button variant="ghost" onClick={onClear}>
               {t("reset")}
             </Button>
@@ -87,6 +99,25 @@ export function ControlsCard({
             </Button>
           ))}
         </div>
+        {mode === "free" && (
+          <div className="flex flex-wrap items-center gap-3 pt-1">
+            <span className="text-sm text-neutral-500">{t("freeMode.currentLabel")}:</span>
+            <select
+              value={freeLabel}
+              onChange={(event) =>
+                onFreeLabelChange(event.target.value as FreeLabel)
+              }
+              className="rounded-md border border-neutral-300 bg-white px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+            >
+              {FREE_LABEL_OPTIONS.map((option) => (
+                <option key={option} value={option}>
+                  {t(MODE_CONFIG[option].labelKey)}
+                </option>
+              ))}
+            </select>
+            <span className="text-sm text-neutral-500">{t("freeMode.instructions")}</span>
+          </div>
+        )}
       </CardHeader>
       <CardContent>
         <div className="flex flex-wrap items-center gap-2 pb-2">
