@@ -1,9 +1,13 @@
-'use client';
+"use client";
+
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Editor, useMonaco } from "@monaco-editor/react";
-import * as BabelParser from "@babel/parser";
-import traverse, { NodePath } from "@babel/traverse";
-import * as t from "@babel/types";
+import dynamic from "next/dynamic";
+
+// ВАЖНО: редактор без SSR
+const Editor = dynamic(() => import("@monaco-editor/react"), { ssr: false });
+
+// Если у тебя есть shadcn/ui — используй эти импорты.
+// Если нет — замени на обычные <button>/<div> c Tailwind.
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -11,39 +15,49 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { CheckCircle2, XCircle, Target, Code2, Info } from "lucide-react";
 
+import * as BabelParser from "@babel/parser";
+import traverse, { type NodePath } from "@babel/traverse";
+import * as t from "@babel/types";
+
 // =====================
 // Types
 // =====================
-
 type Span = { start: number; end: number; kind: string };
 
 // =====================
-// Demo tasks
+// Demo tasks (строки БЕЗ бэктиков снаружи)
 // =====================
+const code = (...lines: string[]) => lines.join("\n");
 
 const TASKS: Record<string, string> = {
-  "S1 — базовое": "const x = a + b * foo(2)\nconsole.log(`${x} px`)",
-  "S2 — опц. чейнинг": 'user?.profile?.getName?.(id ?? "guest") || defaultName',
-  "S3 — выражения в if": "if (check(a = 1)) { doIt() }",
-  "S4 — объекты и вычисляемые ключи":
-    "const o = { [a+b]: 1, k: v ?? (w && z()) }",
-  "S5 — стрелки и IIFE": "const f = (x) => x*x; (function(){ return f(2) })()",
+  "S1 — базовое": code("const x = a + b * foo(2)", "console.log(`${x} px`)"),
+  "S2 — опц. чейнинг": code(
+    'user?.profile?.getName?.(id ?? "guest") || defaultName'
+  ),
+  "S3 — выражения в if": code("if (check(a = 1)) { doIt() }"),
+  "S4 — объекты и вычисляемые ключи": code(
+    "const o = { [a+b]: 1, k: v ?? (w && z()) }"
+  ),
+  "S5 — стрелки и IIFE": code(
+    "const f = (x) => x*x; (function(){ return f(2) })()"
+  ),
 };
+
 // =====================
 // Babel helpers
 // =====================
-
-function parseCode(src: string, opts?: { jsx?: boolean; ts?: boolean }) {
+function parseCode(src: string) {
+  const plugins: any[] = [
+    "jsx",
+    "typescript",
+    "classProperties",
+    "importMeta",
+    "topLevelAwait",
+  ];
   return BabelParser.parse(src, {
     sourceType: "unambiguous",
     ranges: true,
-    plugins: [
-      opts?.jsx ? "jsx" : ("" as any),
-      opts?.ts ? "typescript" : ("" as any),
-      "classProperties",
-      "importMeta",
-      "topLevelAwait",
-    ].filter(Boolean) as any,
+    plugins,
   });
 }
 
@@ -53,22 +67,21 @@ function collectExpressions(
 ): Span[] {
   const ast = parseCode(src);
   const out: Span[] = [];
+
   traverse(ast, {
     enter(path: NodePath) {
       const n = path.node as t.Node;
-      if (t.isExpression(n)) {
-        const parent = path.parent as t.Node | undefined;
-        const pushIt = outermostOnly
-          ? !(parent && t.isExpression(parent))
-          : true;
-        if (pushIt && n.start != null && n.end != null) {
-          // Special case: avoid counting the same range multiple times (rare)
-          out.push({ start: n.start, end: n.end, kind: (n as any).type });
+      if (t.isExpression(n) && n.start != null && n.end != null) {
+        if (outermostOnly) {
+          const p = path.parent as t.Node | undefined;
+          if (p && t.isExpression(p)) return; // пропускаем вложенные
         }
+        out.push({ start: n.start, end: n.end, kind: (n as any).type });
       }
     },
   });
-  // Normalize / deduplicate identical spans
+
+  // dedup + сортировка
   const seen = new Set<string>();
   const uniq = out.filter((s) => {
     const k = `${s.start}-${s.end}`;
@@ -80,14 +93,9 @@ function collectExpressions(
 }
 
 // =====================
-// Monaco helpers
+// Monaco helpers (any-тайпы, чтобы не ругался TS)
 // =====================
-
-function toMonacoRange(
-  model: monaco.editor.ITextModel,
-  start: number,
-  end: number
-) {
+function toMonacoRange(model: any, start: number, end: number) {
   const s = model.getPositionAt(start);
   const e = model.getPositionAt(end);
   return {
@@ -101,19 +109,16 @@ function toMonacoRange(
 function rangesEqual(a: Span, b: Span) {
   return a.start === b.start && a.end === b.end;
 }
-
 function spanKey(s: Span) {
   return `${s.start}-${s.end}`;
 }
 
 // =====================
-// Main Component
+// Component
 // =====================
-
-export default function ExpressionsTrainerPOC() {
-  const monaco = useMonaco();
-  const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
-  const [code, setCode] = useState<string>(TASKS["S1 — базовое"]);
+export default function Page() {
+  const editorRef = useRef<any>(null);
+  const [codeText, setCodeText] = useState<string>(TASKS["S1 — базовое"]);
   const [outerOnly, setOuterOnly] = useState(true);
   const [groundTruth, setGroundTruth] = useState<Span[]>([]);
   const [userSpans, setUserSpans] = useState<Span[]>([]);
@@ -125,10 +130,10 @@ export default function ExpressionsTrainerPOC() {
   } | null>(null);
   const [activeTab, setActiveTab] = useState("task");
 
-  // Build ground truth on code or mode change
+  // перерасчёт эталона
   useEffect(() => {
     try {
-      const gt = collectExpressions(code, { outermostOnly: outerOnly });
+      const gt = collectExpressions(codeText, { outermostOnly: outerOnly });
       setGroundTruth(gt);
       setResult(null);
     } catch (e) {
@@ -136,39 +141,36 @@ export default function ExpressionsTrainerPOC() {
       setGroundTruth([]);
       setResult(null);
     }
-  }, [code, outerOnly]);
+  }, [codeText, outerOnly]);
 
-  // Decorate editor: ground truth (faint border) + user (solid background)
+  // декорации
   useEffect(() => {
-    if (!monaco || !editorRef.current) return;
     const ed = editorRef.current;
-    const model = ed.getModel();
-    if (!model) return;
+    const model = ed?.getModel?.();
+    if (!ed || !model) return;
 
-    const decos: monaco.editor.IModelDeltaDecoration[] = [];
+    const decos: any[] = [];
 
-    // Ground truth styling (subtle outline)
+    // Эталон: пунктир
     for (const s of groundTruth) {
       const r = toMonacoRange(model, s.start, s.end);
       decos.push({
-        range: r as any,
+        range: r,
         options: {
           className: "border-2 border-dashed rounded-md",
-          inlineClassName: "",
           stickiness: 1,
           overviewRuler: { position: 7, color: "#8888" },
         },
       });
     }
 
-    // User picks styling (filled background)
+    // Пользователь: заливка
     for (const s of userSpans) {
       const r = toMonacoRange(model, s.start, s.end);
       decos.push({
-        range: r as any,
+        range: r,
         options: {
           className: "bg-amber-200/40 rounded-md",
-          inlineClassName: "",
           stickiness: 1,
           overviewRuler: { position: 7, color: "#ffaa00" },
         },
@@ -177,15 +179,14 @@ export default function ExpressionsTrainerPOC() {
 
     const ids = ed.deltaDecorations(decorations, decos);
     setDecorations(ids);
-  }, [monaco, groundTruth, userSpans]);
+  }, [groundTruth, userSpans]);
 
-  // Add current selection as user span
+  // добавить выделение
   const addSelection = () => {
     const ed = editorRef.current;
-    const model = ed?.getModel();
-    if (!ed || !model) return;
-    const sel = ed.getSelection();
-    if (!sel) return;
+    const model = ed?.getModel?.();
+    const sel = ed?.getSelection?.();
+    if (!ed || !model || !sel) return;
     const start = model.getOffsetAt({
       lineNumber: sel.startLineNumber,
       column: sel.startColumn,
@@ -196,38 +197,30 @@ export default function ExpressionsTrainerPOC() {
     });
     if (end <= start) return;
     const span: Span = { start, end, kind: "User" };
-
-    setUserSpans((prev) => {
-      const exists = prev.some((p) => rangesEqual(p, span));
-      return exists ? prev : [...prev, span];
-    });
+    setUserSpans((prev) =>
+      prev.some((p) => rangesEqual(p, span)) ? prev : [...prev, span]
+    );
   };
 
   const clearUser = () => setUserSpans([]);
 
-  // Evaluate
+  // проверка
   const check = () => {
     const gtMap = new Map(groundTruth.map((s) => [spanKey(s), s]));
     const userMap = new Map(userSpans.map((s) => [spanKey(s), s]));
 
     const tp: Span[] = [];
     const fp: Span[] = [];
-
-    for (const [k, u] of userMap) {
-      if (gtMap.has(k)) tp.push(u);
-      else fp.push(u);
-    }
-
     const fn: Span[] = [];
-    for (const [k, g] of gtMap) {
-      if (!userMap.has(k)) fn.push(g);
-    }
+
+    for (const [k, u] of userMap) gtMap.has(k) ? tp.push(u) : fp.push(u);
+    for (const [k, g] of gtMap) if (!userMap.has(k)) fn.push(g);
 
     setResult({ tp, fp, fn });
     setActiveTab("report");
   };
 
-  // Insert ground truth hint for next expression (outermost) that is not yet picked
+  // подсказка
   const hintOne = () => {
     const next = groundTruth.find(
       (gt) => !userSpans.some((u) => rangesEqual(u, gt))
@@ -236,17 +229,45 @@ export default function ExpressionsTrainerPOC() {
     setUserSpans((prev) => [...prev, { ...next, kind: "Hint" }]);
   };
 
-  const onMount = (editor: monaco.editor.IStandaloneCodeEditor) => {
+  // монтиование редактора
+  const onMount = (editor: any) => {
     editorRef.current = editor;
   };
 
-  // UI bits
+  // 👇 добавлено: удобные подсказки в отчёте
+  const highlightRange = (span: Span) => {
+    const ed = editorRef.current;
+    const model = ed?.getModel?.();
+    if (!ed || !model) return;
+    const range = toMonacoRange(model, span.start, span.end);
+    ed.revealRangeInCenter(range);
+    ed.setSelection(range);
+    ed.focus();
+  };
+
+  const getSnippet = (start: number, end: number) => {
+    const raw = codeText.slice(start, end);
+    const compact = raw
+      .replaceAll("\n", " ")
+      .replaceAll("\r", " ")
+      .replaceAll("\t", " ")
+      .trim();
+    return compact.length > 80 ? compact.slice(0, 77) + "…" : compact;
+  };
+
+  // счёт
   const score = useMemo(() => {
     if (!result) return null;
-    const { tp, fp, fn } = result;
-    const raw = tp.length - 0.5 * fp.length; // simple scoring
+    const { tp, fp } = result;
+    const raw = tp.length - 0.5 * fp.length;
     const max = groundTruth.length;
-    return { raw, max, tp: tp.length, fp: fp.length, fn: fn.length };
+    return {
+      raw,
+      max,
+      tp: tp.length,
+      fp: fp.length,
+      fn: (result.fn || []).length,
+    };
   }, [result, groundTruth.length]);
 
   return (
@@ -287,9 +308,9 @@ export default function ExpressionsTrainerPOC() {
                 <Button
                   key={k}
                   size="sm"
-                  variant={code === TASKS[k] ? "default" : "outline"}
+                  variant={codeText === TASKS[k] ? "default" : "outline"}
                   onClick={() => {
-                    setCode(TASKS[k]);
+                    setCodeText(TASKS[k]);
                     setUserSpans([]);
                   }}
                 >
@@ -301,8 +322,8 @@ export default function ExpressionsTrainerPOC() {
               <Editor
                 height="420px"
                 defaultLanguage="javascript"
-                value={code}
-                onChange={(v) => setCode(v ?? "")}
+                value={codeText}
+                onChange={(v) => setCodeText(v ?? "")}
                 onMount={onMount}
                 options={{
                   fontSize: 14,
@@ -326,8 +347,7 @@ export default function ExpressionsTrainerPOC() {
               </Button>
               <div className="text-sm text-neutral-600 flex items-center gap-2">
                 <Info className="w-4 h-4" />
-                Выделите фрагмент в редакторе и нажмите «Добавить». Повторяйте
-                для всех выражений.
+                Выделите фрагмент в редакторе и нажмите «Добавить».
               </div>
             </div>
           </CardContent>
@@ -352,9 +372,12 @@ export default function ExpressionsTrainerPOC() {
               <div className="font-medium mb-2">Ваши выделения</div>
               <div className="max-h-40 overflow-auto space-y-1">
                 {userSpans.map((s, i) => (
-                  <div key={i} className="flex items-center justify-between">
-                    <span className="text-neutral-600">
-                      {s.start}…{s.end}
+                  <div
+                    key={i}
+                    className="flex items-center justify-between gap-2"
+                  >
+                    <span className="text-neutral-600 truncate max-w-[220px]">
+                      <code>{getSnippet(s.start, s.end)}</code>
                     </span>
                     <Button
                       size="xs"
@@ -388,17 +411,20 @@ export default function ExpressionsTrainerPOC() {
               <CardContent className="text-sm space-y-2">
                 <ul className="list-disc pl-5 space-y-1">
                   <li>
-                    Режим «Только внешние» считает выражения, у которых родитель
-                    — не выражение.
+                    Режим «Только внешние» — берём выражения, у которых родитель
+                    не выражение.
                   </li>
                   <li>
-                    Подсказка добавляет следующее ещё не отмеченное внешнее
+                    Подсказка добавляет следующее неотмеченное внешнее
                     выражение.
                   </li>
                   <li>
-                    Лёгкие ловушки: вся конструкция <code>if (...) {`{}`}</code>{" "}
-                    — это оператор, а не выражение; внутри — вызов{" "}
-                    <code>doIt()</code> сам по себе выражение.
+                    Ловушка:{" "}
+                    <code>
+                      if (...) {"{"} … {"}"}
+                    </code>{" "}
+                    — оператор, а не выражение; зато
+                    <code> doIt()</code> внутри — выражение.
                   </li>
                 </ul>
               </CardContent>
@@ -437,8 +463,15 @@ export default function ExpressionsTrainerPOC() {
                         <div className="font-medium mb-1">Верно</div>
                         <ul className="text-neutral-700 max-h-36 overflow-auto space-y-1">
                           {result.tp.map((s, i) => (
-                            <li key={"tp" + i}>
-                              {s.start}…{s.end}
+                            <li
+                              key={"tp" + i}
+                              onClick={() => highlightRange(s)}
+                              className="cursor-pointer hover:bg-amber-50 rounded px-1"
+                            >
+                              <code>{getSnippet(s.start, s.end)}</code>
+                              <span className="text-neutral-500 ml-1">
+                                ({s.kind})
+                              </span>
                             </li>
                           ))}
                           {result.tp.length === 0 && (
@@ -450,8 +483,15 @@ export default function ExpressionsTrainerPOC() {
                         <div className="font-medium mb-1">Лишние</div>
                         <ul className="text-neutral-700 max-h-36 overflow-auto space-y-1">
                           {result.fp.map((s, i) => (
-                            <li key={"fp" + i}>
-                              {s.start}…{s.end}
+                            <li
+                              key={"fp" + i}
+                              onClick={() => highlightRange(s)}
+                              className="cursor-pointer hover:bg-amber-50 rounded px-1"
+                            >
+                              <code>{getSnippet(s.start, s.end)}</code>
+                              <span className="text-neutral-500 ml-1">
+                                ({s.kind})
+                              </span>
                             </li>
                           ))}
                           {result.fp.length === 0 && (
@@ -463,8 +503,15 @@ export default function ExpressionsTrainerPOC() {
                         <div className="font-medium mb-1">Пропущены</div>
                         <ul className="text-neutral-700 max-h-36 overflow-auto space-y-1">
                           {result.fn.map((s, i) => (
-                            <li key={"fn" + i}>
-                              {s.start}…{s.end}
+                            <li
+                              key={"fn" + i}
+                              onClick={() => highlightRange(s)}
+                              className="cursor-pointer hover:bg-amber-50 rounded px-1"
+                            >
+                              <code>{getSnippet(s.start, s.end)}</code>
+                              <span className="text-neutral-500 ml-1">
+                                ({s.kind})
+                              </span>
                             </li>
                           ))}
                           {result.fn.length === 0 && (
