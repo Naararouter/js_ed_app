@@ -18,11 +18,125 @@ import { CheckCircle2, XCircle, Target, Code2, Info } from "lucide-react";
 import * as BabelParser from "@babel/parser";
 import traverse, { type NodePath } from "@babel/traverse";
 import * as t from "@babel/types";
+import type { ParserPlugin } from "@babel/parser";
 
 // =====================
 // Types
 // =====================
 type Span = { start: number; end: number; kind: string };
+type HighlightMode =
+  | "expressions"
+  | "identifiers"
+  | "operators"
+  | "keywords"
+  | "functionDefinitions"
+  | "functionCalls"
+  | "objectKeys"
+  | "literals";
+
+type ModeConfig = {
+  label: string;
+  supportsOuterOnly?: boolean;
+};
+
+type CollectOptions = {
+  outermostOnly?: boolean;
+};
+
+type BabelToken = {
+  start: number;
+  end: number;
+  type: {
+    label: string;
+    keyword?: string;
+    binop?: boolean;
+    prefix?: boolean;
+    postfix?: boolean;
+    isAssign?: boolean;
+  };
+  value?: string;
+};
+
+type MonacoPosition = {
+  lineNumber: number;
+  column: number;
+};
+
+type MonacoRange = {
+  startLineNumber: number;
+  startColumn: number;
+  endLineNumber: number;
+  endColumn: number;
+};
+
+type MonacoModel = {
+  getPositionAt(offset: number): MonacoPosition;
+  getOffsetAt(position: MonacoPosition): number;
+};
+
+type DecorationOptions = {
+  className: string;
+  stickiness: number;
+  overviewRuler: { position: number; color: string };
+};
+
+type MonacoDecoration = {
+  range: MonacoRange;
+  options: DecorationOptions;
+};
+
+type MonacoEditor = {
+  getModel(): MonacoModel | null;
+  getSelection(): MonacoRange | null;
+  deltaDecorations(
+    oldDecorations: string[],
+    decorations: MonacoDecoration[]
+  ): string[];
+  revealRangeInCenter(range: MonacoRange): void;
+  setSelection(range: MonacoRange): void;
+  focus(): void;
+};
+
+const MODE_CONFIG: Record<HighlightMode, ModeConfig> = {
+  expressions: { label: "Выражения", supportsOuterOnly: true },
+  identifiers: { label: "Идентификаторы" },
+  operators: { label: "Операторы" },
+  keywords: { label: "Ключевые слова" },
+  functionDefinitions: { label: "Опред. функций" },
+  functionCalls: { label: "Вызовы функций" },
+  objectKeys: { label: "Ключи объекта" },
+  literals: { label: "Литералы" },
+};
+
+const MODE_ORDER: HighlightMode[] = [
+  "expressions",
+  "identifiers",
+  "operators",
+  "keywords",
+  "functionDefinitions",
+  "functionCalls",
+  "objectKeys",
+  "literals",
+];
+
+const isOptionalCallExpression = (
+  node: t.Node
+): node is t.OptionalCallExpression => node.type === "OptionalCallExpression";
+
+const isTSDeclareFunction = (
+  node: t.Node
+): node is t.TSDeclareFunction => node.type === "TSDeclareFunction";
+
+type TypeHelpers = {
+  isBigIntLiteral?: (value: t.Node) => value is t.BigIntLiteral;
+};
+
+const typeHelpers = t as unknown as TypeHelpers;
+
+const isBigIntLiteral = (node: t.Node): node is t.BigIntLiteral =>
+  typeof typeHelpers.isBigIntLiteral === "function"
+    ? typeHelpers.isBigIntLiteral(node)
+    : false;
 
 // =====================
 // Demo tasks (строки БЕЗ бэктиков снаружи)
@@ -41,13 +155,26 @@ const TASKS: Record<string, string> = {
   "S5 — стрелки и IIFE": code(
     "const f = (x) => x*x; (function(){ return f(2) })()"
   ),
+  "S6 — объект": code(
+    "const propertyName = 'dynamic';",
+    "const everybodyObj = {",
+    "  0: 'Yetu',",
+    "  1: 'Tabitha',",
+    "  2: 'Rasha',",
+    "  3: 'Max',",
+    "  4: 'Yazul',",
+    "  5: 'Todd',",
+    "  findIndex: function () { return 'empty'; },",
+    "  [propertyName]: () => 'empty2'",
+    "};"
+  ),
 };
 
 // =====================
 // Babel helpers
 // =====================
 function parseCode(src: string) {
-  const plugins: any[] = [
+  const plugins: ParserPlugin[] = [
     "jsx",
     "typescript",
     "classProperties",
@@ -57,17 +184,54 @@ function parseCode(src: string) {
   return BabelParser.parse(src, {
     sourceType: "unambiguous",
     ranges: true,
+    tokens: true,
     plugins,
   });
 }
 
-function collectExpressions(
+function collectSpans(
   src: string,
-  { outermostOnly }: { outermostOnly: boolean }
+  mode: HighlightMode,
+  { outermostOnly }: CollectOptions
 ): Span[] {
-  const ast = parseCode(src);
-  const out: Span[] = [];
+  const ast = parseCode(src) as unknown as t.File & { tokens?: BabelToken[] };
+  const tokens = ast.tokens ?? [];
+  let spans: Span[] = [];
 
+  switch (mode) {
+    case "expressions":
+      spans = collectExpressionSpans(ast, Boolean(outermostOnly));
+      break;
+    case "identifiers":
+      spans = collectIdentifierSpans(ast);
+      break;
+    case "operators":
+      spans = collectOperatorSpans(tokens);
+      break;
+    case "keywords":
+      spans = collectKeywordSpans(tokens);
+      break;
+    case "functionDefinitions":
+      spans = collectFunctionDefinitionSpans(ast);
+      break;
+    case "functionCalls":
+      spans = collectFunctionCallSpans(ast);
+      break;
+    case "objectKeys":
+      spans = collectObjectKeySpans(ast);
+      break;
+    case "literals":
+      spans = collectLiteralSpans(ast);
+      break;
+    default:
+      spans = [];
+  }
+
+  return dedupeAndSort(spans);
+}
+
+function collectExpressionSpans(ast: t.Node, outermostOnly: boolean): Span[] {
+  const out: Span[] = [];
   traverse(ast, {
     enter(path: NodePath) {
       const n = path.node as t.Node;
@@ -76,14 +240,231 @@ function collectExpressions(
           const p = path.parent as t.Node | undefined;
           if (p && t.isExpression(p)) return; // пропускаем вложенные
         }
-        out.push({ start: n.start, end: n.end, kind: (n as any).type });
+        if (t.isIdentifier(n)) return;
+        out.push({ start: n.start, end: n.end, kind: n.type });
       }
     },
   });
 
+  return out;
+}
+
+function collectIdentifierSpans(ast: t.Node): Span[] {
+  const out: Span[] = [];
+  traverse(ast, {
+    Identifier(path) {
+      const n = path.node;
+      if (n.start != null && n.end != null) {
+        out.push({ start: n.start, end: n.end, kind: "Identifier" });
+      }
+    },
+    JSXIdentifier(path) {
+      const n = path.node;
+      if (n.start != null && n.end != null) {
+        out.push({ start: n.start, end: n.end, kind: "JSXIdentifier" });
+      }
+    },
+  });
+
+  return out;
+}
+
+const operatorLabelSet = new Set([
+  "+",
+  "-",
+  "*",
+  "/",
+  "%",
+  "**",
+  "++",
+  "--",
+  "=",
+  "+=",
+  "-=",
+  "*=",
+  "/=",
+  "%=",
+  "**=",
+  "<<",
+  ">>",
+  ">>>",
+  "<<=",
+  ">>=",
+  ">>>=",
+  "&",
+  "|",
+  "^",
+  "~",
+  "!",
+  "&&",
+  "||",
+  "??",
+  "?.",
+  ">",
+  "<",
+  ">=",
+  "<=",
+  "==",
+  "!=",
+  "===",
+  "!==",
+  "=>",
+  "?",
+  ":",
+  "??=",
+  "&&=",
+  "||=",
+]);
+
+function collectOperatorSpans(tokens: BabelToken[]): Span[] {
+  return tokens
+    .filter((token) => {
+      const type = token.type ?? {};
+      if (type.keyword) return false;
+      if (token.start == null || token.end == null) return false;
+      return (
+        Boolean(type.binop) ||
+        Boolean(type.prefix) ||
+        Boolean(type.postfix) ||
+        Boolean(type.isAssign) ||
+        operatorLabelSet.has(type.label)
+      );
+    })
+    .map((token) => ({
+      start: token.start,
+      end: token.end,
+      kind: `Operator`,
+    }));
+}
+
+const keywordFallbackLabels = new Set([
+  "null",
+  "true",
+  "false",
+  "this",
+  "super",
+  "new",
+]);
+
+function collectKeywordSpans(tokens: BabelToken[]): Span[] {
+  return tokens
+    .filter((token) => {
+      const type = token.type ?? {};
+      if (token.start == null || token.end == null) return false;
+      return Boolean(type.keyword) || keywordFallbackLabels.has(type.label);
+    })
+    .map((token) => ({
+      start: token.start,
+      end: token.end,
+      kind: "Keyword",
+    }));
+}
+
+function collectFunctionDefinitionSpans(ast: t.Node): Span[] {
+  const out: Span[] = [];
+  traverse(ast, {
+    enter(path) {
+      const n = path.node;
+      if (n.start == null || n.end == null) return;
+      if (t.isFunctionDeclaration(n)) {
+        out.push({ start: n.start, end: n.end, kind: "FunctionDeclaration" });
+      } else if (t.isFunctionExpression(n)) {
+        out.push({ start: n.start, end: n.end, kind: "FunctionExpression" });
+      } else if (t.isArrowFunctionExpression(n)) {
+        out.push({
+          start: n.start,
+          end: n.end,
+          kind: "ArrowFunctionExpression",
+        });
+      } else if (t.isObjectMethod(n)) {
+        out.push({ start: n.start, end: n.end, kind: "ObjectMethod" });
+      } else if (t.isClassMethod(n)) {
+        out.push({ start: n.start, end: n.end, kind: "ClassMethod" });
+      } else if (t.isClassPrivateMethod(n)) {
+        out.push({ start: n.start, end: n.end, kind: "ClassPrivateMethod" });
+      } else if (isTSDeclareFunction(n)) {
+        out.push({ start: n.start, end: n.end, kind: "TSDeclareFunction" });
+      }
+    },
+  });
+  return out;
+}
+
+function collectFunctionCallSpans(ast: t.Node): Span[] {
+  const out: Span[] = [];
+  traverse(ast, {
+    enter(path) {
+      const n = path.node;
+      if (n.start == null || n.end == null) return;
+      if (isOptionalCallExpression(n)) {
+        out.push({
+          start: n.start,
+          end: n.end,
+          kind: "OptionalCallExpression",
+        });
+      } else if (t.isCallExpression(n)) {
+        out.push({ start: n.start, end: n.end, kind: "CallExpression" });
+      } else if (t.isNewExpression(n)) {
+        out.push({ start: n.start, end: n.end, kind: "NewExpression" });
+      }
+    },
+  });
+  return out;
+}
+
+function collectObjectKeySpans(ast: t.Node): Span[] {
+  const out: Span[] = [];
+
+  const pushKey = (key: t.Node, computed: boolean) => {
+    if (key.start == null || key.end == null) return;
+    out.push({
+      start: key.start,
+      end: key.end,
+      kind: computed ? "ObjectKey[computed]" : "ObjectKey",
+    });
+  };
+
+  traverse(ast, {
+    ObjectProperty(path) {
+      pushKey(path.node.key, path.node.computed ?? false);
+    },
+    ObjectMethod(path) {
+      pushKey(path.node.key, path.node.computed ?? false);
+    },
+  });
+
+  return out;
+}
+
+function collectLiteralSpans(ast: t.Node): Span[] {
+  const out: Span[] = [];
+  traverse(ast, {
+    enter(path) {
+      const n = path.node;
+      if (n.start == null || n.end == null) return;
+      if (t.isTemplateLiteral(n)) {
+        out.push({ start: n.start, end: n.end, kind: "TemplateLiteral" });
+        return;
+      }
+      if (
+        t.isStringLiteral(n) ||
+        t.isNumericLiteral(n) ||
+        t.isBooleanLiteral(n) ||
+        t.isNullLiteral(n) ||
+        t.isRegExpLiteral(n) ||
+        isBigIntLiteral(n)
+      ) {
+        out.push({ start: n.start, end: n.end, kind: n.type });
+      }
+    },
+  });
+  return out;
+}
+
+function dedupeAndSort(spans: Span[]): Span[] {
   // dedup + сортировка
   const seen = new Set<string>();
-  const uniq = out.filter((s) => {
+  const uniq = spans.filter((s) => {
     const k = `${s.start}-${s.end}`;
     if (seen.has(k)) return false;
     seen.add(k);
@@ -93,9 +474,9 @@ function collectExpressions(
 }
 
 // =====================
-// Monaco helpers (any-тайпы, чтобы не ругался TS)
+// Monaco helpers
 // =====================
-function toMonacoRange(model: any, start: number, end: number) {
+function toMonacoRange(model: MonacoModel, start: number, end: number): MonacoRange {
   const s = model.getPositionAt(start);
   const e = model.getPositionAt(end);
   return {
@@ -117,23 +498,28 @@ function spanKey(s: Span) {
 // Component
 // =====================
 export default function Page() {
-  const editorRef = useRef<any>(null);
+  const editorRef = useRef<MonacoEditor | null>(null);
+  const [mode, setMode] = useState<HighlightMode>("expressions");
   const [codeText, setCodeText] = useState<string>(TASKS["S1 — базовое"]);
-  const [outerOnly, setOuterOnly] = useState(true);
+  const [outerOnly, setOuterOnly] = useState(false);
   const [groundTruth, setGroundTruth] = useState<Span[]>([]);
   const [userSpans, setUserSpans] = useState<Span[]>([]);
-  const [decorations, setDecorations] = useState<string[]>([]);
+  const [, setDecorations] = useState<string[]>([]);
   const [result, setResult] = useState<{
     tp: Span[];
     fp: Span[];
     fn: Span[];
   } | null>(null);
   const [activeTab, setActiveTab] = useState("task");
+  const modeConfig = MODE_CONFIG[mode];
+  const supportsOuterOnly = Boolean(modeConfig.supportsOuterOnly);
 
   // перерасчёт эталона
   useEffect(() => {
     try {
-      const gt = collectExpressions(codeText, { outermostOnly: outerOnly });
+      const gt = collectSpans(codeText, mode, {
+        outermostOnly: supportsOuterOnly ? outerOnly : false,
+      });
       setGroundTruth(gt);
       setResult(null);
     } catch (e) {
@@ -141,15 +527,15 @@ export default function Page() {
       setGroundTruth([]);
       setResult(null);
     }
-  }, [codeText, outerOnly]);
+  }, [codeText, mode, outerOnly, supportsOuterOnly]);
 
   // декорации
   useEffect(() => {
     const ed = editorRef.current;
-    const model = ed?.getModel?.();
+    const model = ed?.getModel();
     if (!ed || !model) return;
 
-    const decos: any[] = [];
+    const decos: MonacoDecoration[] = [];
 
     // Эталон: пунктир
     for (const s of groundTruth) {
@@ -177,15 +563,14 @@ export default function Page() {
       });
     }
 
-    const ids = ed.deltaDecorations(decorations, decos);
-    setDecorations(ids);
+    setDecorations((prev) => ed.deltaDecorations(prev, decos));
   }, [groundTruth, userSpans]);
 
   // добавить выделение
   const addSelection = () => {
     const ed = editorRef.current;
-    const model = ed?.getModel?.();
-    const sel = ed?.getSelection?.();
+    const model = ed?.getModel();
+    const sel = ed?.getSelection();
     if (!ed || !model || !sel) return;
     const start = model.getOffsetAt({
       lineNumber: sel.startLineNumber,
@@ -213,8 +598,18 @@ export default function Page() {
     const fp: Span[] = [];
     const fn: Span[] = [];
 
-    for (const [k, u] of userMap) gtMap.has(k) ? tp.push(u) : fp.push(u);
-    for (const [k, g] of gtMap) if (!userMap.has(k)) fn.push(g);
+    for (const [k, u] of userMap) {
+      if (gtMap.has(k)) {
+        tp.push(u);
+      } else {
+        fp.push(u);
+      }
+    }
+    for (const [k, g] of gtMap) {
+      if (!userMap.has(k)) {
+        fn.push(g);
+      }
+    }
 
     setResult({ tp, fp, fn });
     setActiveTab("report");
@@ -230,14 +625,14 @@ export default function Page() {
   };
 
   // монтиование редактора
-  const onMount = (editor: any) => {
+  const onMount = (editor: MonacoEditor) => {
     editorRef.current = editor;
   };
 
   // 👇 добавлено: удобные подсказки в отчёте
   const highlightRange = (span: Span) => {
     const ed = editorRef.current;
-    const model = ed?.getModel?.();
+    const model = ed?.getModel();
     if (!ed || !model) return;
     const range = toMonacoRange(model, span.start, span.end);
     ed.revealRangeInCenter(range);
@@ -274,32 +669,64 @@ export default function Page() {
     <div className="w-full min-h-screen p-4 md:p-6 grid gap-4 md:gap-6 grid-cols-1 lg:grid-cols-12 bg-neutral-50">
       <div className="lg:col-span-8 space-y-3">
         <Card className="shadow-sm">
-          <CardHeader className="flex flex-row items-center justify-between">
-            <CardTitle className="flex items-center gap-2 text-xl">
-              <Target className="w-5 h-5" />
-              Задание
-            </CardTitle>
-            <div className="flex items-center gap-3">
-              <div className="flex items-center gap-2">
-                <Switch
-                  id="outerOnly"
-                  checked={outerOnly}
-                  onCheckedChange={setOuterOnly}
-                />
-                <Label htmlFor="outerOnly" className="cursor-pointer">
-                  Только внешние выражения
-                </Label>
+          <CardHeader className="space-y-3">
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <CardTitle className="flex items-center gap-2 text-xl">
+                <Target className="w-5 h-5" />
+                Задание
+              </CardTitle>
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="flex items-center gap-2">
+                  <Switch
+                    id="outerOnly"
+                    checked={supportsOuterOnly ? outerOnly : false}
+                    onCheckedChange={(value) => {
+                      if (supportsOuterOnly) {
+                        setOuterOnly(value);
+                      }
+                    }}
+                    disabled={!supportsOuterOnly}
+                  />
+                  <Label
+                    htmlFor="outerOnly"
+                    className={
+                      supportsOuterOnly
+                        ? "cursor-pointer"
+                        : "cursor-not-allowed text-neutral-400"
+                    }
+                  >
+                    {supportsOuterOnly
+                      ? "Только внешние выражения"
+                      : "Только внешние (только для выражений)"}
+                  </Label>
+                </div>
+                <Button variant="secondary" onClick={hintOne}>
+                  Подсказка
+                </Button>
+                <Button variant="ghost" onClick={clearUser}>
+                  Сбросить
+                </Button>
+                <Button onClick={check} className="gap-2">
+                  <CheckCircle2 className="w-4 h-4" />
+                  Проверить
+                </Button>
               </div>
-              <Button variant="secondary" onClick={hintOne}>
-                Подсказка
-              </Button>
-              <Button variant="ghost" onClick={clearUser}>
-                Сбросить
-              </Button>
-              <Button onClick={check} className="gap-2">
-                <CheckCircle2 className="w-4 h-4" />
-                Проверить
-              </Button>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {MODE_ORDER.map((id) => (
+                <Button
+                  key={id}
+                  size="sm"
+                  variant={mode === id ? "default" : "outline"}
+                  onClick={() => {
+                    setMode(id);
+                    setUserSpans([]);
+                    setResult(null);
+                  }}
+                >
+                  {MODE_CONFIG[id].label}
+                </Button>
+              ))}
             </div>
           </CardHeader>
           <CardContent>
@@ -323,7 +750,6 @@ export default function Page() {
                 height="420px"
                 defaultLanguage="javascript"
                 value={codeText}
-                onChange={(v) => setCodeText(v ?? "")}
                 onMount={onMount}
                 options={{
                   fontSize: 14,
@@ -333,6 +759,7 @@ export default function Page() {
                   wordWrap: "on",
                   occurrencesHighlight: false,
                   selectionHighlight: false,
+                  readOnly: true,
                 }}
               />
             </div>
@@ -411,8 +838,13 @@ export default function Page() {
               <CardContent className="text-sm space-y-2">
                 <ul className="list-disc pl-5 space-y-1">
                   <li>
-                    Режим «Только внешние» — берём выражения, у которых родитель
-                    не выражение.
+                    Выбирайте режим выше — можно тренироваться на выражениях,
+                    идентификаторах, операторах, ключевых словах, определениях и
+                    вызовах функций, ключах объектов и литералах.
+                  </li>
+                  <li>
+                    «Только внешние» доступен только для режима выражений и
+                    исключает вложенные выражения из эталона.
                   </li>
                   <li>
                     Подсказка добавляет следующее неотмеченное внешнее
