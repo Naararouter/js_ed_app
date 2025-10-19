@@ -14,6 +14,7 @@ export const TASKS: Record<string, string> = {
   ),
   "S6 — объект": code(
     "const propertyName = 'dynamic';",
+    "const testObj = {};",
     "const everybodyObj = {",
     "  0: 'Yetu',",
     "  1: 'Tabitha',",
