@@ -26,3 +26,12 @@ export const TASKS: Record<string, string> = {
     "};"
   ),
 };
+
+export const TASK_LABEL_KEYS: Record<string, string> = {
+  "S1 — базовое": "tasks.s1",
+  "S2 — опц. чейнинг": "tasks.s2",
+  "S3 — выражения в if": "tasks.s3",
+  "S4 — объекты и вычисляемые ключи": "tasks.s4",
+  "S5 — стрелки и IIFE": "tasks.s5",
+  "S6 — объект": "tasks.s6",
+};

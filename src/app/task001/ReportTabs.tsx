@@ -1,5 +1,6 @@
 "use client";
 
+import { Trans, useTranslation } from "react-i18next";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CheckCircle2, Target, XCircle } from "lucide-react";
@@ -37,6 +38,8 @@ export function ReportTabs({
   codeText,
   onSpanClick,
 }: ReportTabsProps) {
+  const { t } = useTranslation("task001");
+
   const renderSpanList = (items: Span[]) =>
     items.length > 0 ? (
       items.map((span, index) => (
@@ -50,35 +53,31 @@ export function ReportTabs({
         </li>
       ))
     ) : (
-      <li className="text-neutral-500">—</li>
+      <li className="text-neutral-500">{t("status.empty")}</li>
     );
 
   return (
     <Tabs value={activeTab} onValueChange={onTabChange}>
       <TabsList className="grid grid-cols-2 w-full">
-        <TabsTrigger value={taskTabId}>Отчёт</TabsTrigger>
-        <TabsTrigger value={reportTabId}>Детали</TabsTrigger>
+        <TabsTrigger value={taskTabId}>{t("tabs.report")}</TabsTrigger>
+        <TabsTrigger value={reportTabId}>{t("tabs.details")}</TabsTrigger>
       </TabsList>
       <TabsContent value={taskTabId}>
         <Card className="shadow-sm">
           <CardHeader>
-            <CardTitle>Рекомендации</CardTitle>
+            <CardTitle>{t("recommendations.title")}</CardTitle>
           </CardHeader>
           <CardContent className="text-sm space-y-2">
             <ul className="list-disc pl-5 space-y-1">
+              <li>{t("recommendations.item1")}</li>
+              <li>{t("recommendations.item2")}</li>
+              <li>{t("recommendations.item3")}</li>
               <li>
-                Выбирайте режим выше — можно тренироваться на выражениях,
-                идентификаторах, операторах, ключевых словах, определениях и
-                вызовах функций, ключах объектов и литералах.
-              </li>
-              <li>
-                «Только внешние» доступен только для режима выражений и исключает
-                вложенные выражения из эталона.
-              </li>
-              <li>Подсказка добавляет следующее неотмеченное внешнее выражение.</li>
-              <li>
-                Ловушка: <code>if (...) {"{"} ... {"}"}</code> — оператор, а не
-                выражение; зато <code>doIt()</code> внутри — выражение.
+                <Trans
+                  t={t}
+                  i18nKey="recommendations.item4"
+                  components={[<code key="code-0" />, <code key="code-1" />]}
+                />
               </li>
             </ul>
           </CardContent>
@@ -87,7 +86,7 @@ export function ReportTabs({
       <TabsContent value={reportTabId}>
         <Card className="shadow-sm">
           <CardHeader>
-            <CardTitle>Результаты проверки</CardTitle>
+            <CardTitle>{t("report.title")}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2 text-sm">
             {result ? (
@@ -95,37 +94,38 @@ export function ReportTabs({
                 <div className="flex flex-wrap gap-3 text-base">
                   <span className="flex items-center gap-1">
                     <CheckCircle2 className="w-5 h-5 text-green-600" />
-                    Верно: <b>{result.tp.length}</b>
+                    {t("report.correct")}: <b>{result.tp.length}</b>
                   </span>
                   <span className="flex items-center gap-1">
                     <XCircle className="w-5 h-5 text-red-600" />
-                    Лишние: <b>{result.fp.length}</b>
+                    {t("report.extra")}: <b>{result.fp.length}</b>
                   </span>
                   <span className="flex items-center gap-1">
                     <Target className="w-5 h-5 text-amber-600" />
-                    Пропущены: <b>{result.fn.length}</b>
+                    {t("report.missed")}: <b>{result.fn.length}</b>
                   </span>
                 </div>
                 {score && (
                   <div className="text-neutral-700">
-                    Счёт: <b>{score.raw.toFixed(1)}</b> из возможных <b>{score.max}</b>
+                    {t("report.score")}: <b>{score.raw.toFixed(1)}</b>{" "}
+                    {t("report.scoreOutOf")} <b>{score.max}</b>
                   </div>
                 )}
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2">
                   <div>
-                    <div className="font-medium mb-1">Верно</div>
+                    <div className="font-medium mb-1">{t("report.correct")}</div>
                     <ul className="text-neutral-700 max-h-36 overflow-auto space-y-1">
                       {renderSpanList(result.tp)}
                     </ul>
                   </div>
                   <div>
-                    <div className="font-medium mb-1">Лишние</div>
+                    <div className="font-medium mb-1">{t("report.extra")}</div>
                     <ul className="text-neutral-700 max-h-36 overflow-auto space-y-1">
                       {renderSpanList(result.fp)}
                     </ul>
                   </div>
                   <div>
-                    <div className="font-medium mb-1">Пропущены</div>
+                    <div className="font-medium mb-1">{t("report.missed")}</div>
                     <ul className="text-neutral-700 max-h-36 overflow-auto space-y-1">
                       {renderSpanList(result.fn)}
                     </ul>
@@ -133,9 +133,7 @@ export function ReportTabs({
                 </div>
               </div>
             ) : (
-              <div className="text-neutral-500">
-                Нажмите «Проверить», чтобы увидеть отчёт.
-              </div>
+              <div className="text-neutral-500">{t("report.noData")}</div>
             )}
           </CardContent>
         </Card>

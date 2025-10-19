@@ -2,16 +2,13 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
+import "./i18n";
+
 import { ControlsCard } from "./ControlsCard";
 import { StatusPanel } from "./StatusPanel";
 import { ReportTabs } from "./ReportTabs";
 import { TASKS } from "./tasks";
-import {
-  collectSpans,
-  MODE_CONFIG,
-  type HighlightMode,
-  type Span,
-} from "./highlight";
+import { collectSpans, type HighlightMode, type Span } from "./highlight";
 import { toMonacoRange, type MonacoDecoration, type MonacoEditor } from "./monaco";
 import { rangesEqual, spanKey } from "./span-utils";
 import type { Result } from "./types";
@@ -25,19 +22,14 @@ export default function Page() {
 
   const [mode, setMode] = useState<HighlightMode>("expressions");
   const [codeText, setCodeText] = useState<string>(TASKS["S1 — базовое"]);
-  const [outerOnly, setOuterOnly] = useState(false);
   const [groundTruth, setGroundTruth] = useState<Span[]>([]);
   const [userSpans, setUserSpans] = useState<Span[]>([]);
   const [result, setResult] = useState<Result | null>(null);
   const [activeTab, setActiveTab] = useState(TAB_TASK);
 
-  const supportsOuterOnly = Boolean(MODE_CONFIG[mode]?.supportsOuterOnly);
-
   useEffect(() => {
     try {
-      const spans = collectSpans(codeText, mode, {
-        outermostOnly: supportsOuterOnly ? outerOnly : false,
-      });
+      const spans = collectSpans(codeText, mode);
       setGroundTruth(spans);
       setResult(null);
     } catch (error) {
@@ -45,7 +37,7 @@ export default function Page() {
       setGroundTruth([]);
       setResult(null);
     }
-  }, [codeText, mode, outerOnly, supportsOuterOnly]);
+  }, [codeText, mode]);
 
   useEffect(() => {
     const editor = editorRef.current;
@@ -58,9 +50,9 @@ export default function Page() {
       decorations.push({
         range: toMonacoRange(model, span.start, span.end),
         options: {
-          className: "border-2 border-dashed rounded-md",
+          className: "bg-emerald-200/30 rounded-md",
           stickiness: 1,
-          overviewRuler: { position: 7, color: "#8888" },
+          overviewRuler: { position: 7, color: "#4ade8044" },
         },
       });
     }
@@ -190,11 +182,8 @@ export default function Page() {
           mode={mode}
           codeText={codeText}
           tasks={TASKS}
-          outerOnly={outerOnly}
-          supportsOuterOnly={supportsOuterOnly}
           onModeChange={handleModeChange}
           onTaskSelect={handleTaskSelect}
-          onToggleOuter={setOuterOnly}
           onAddSelection={addSelection}
           onHint={hintOne}
           onClear={clearUser}

@@ -1,18 +1,14 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
 import { Code2, Info, Target, CheckCircle2 } from "lucide-react";
 
-import {
-  MODE_CONFIG,
-  MODE_ORDER,
-  type HighlightMode,
-} from "./highlight";
+import { MODE_CONFIG, MODE_ORDER, type HighlightMode } from "./highlight";
 import type { MonacoEditor } from "./monaco";
+import { TASK_LABEL_KEYS } from "./tasks";
 
 const Editor = dynamic(() => import("@monaco-editor/react"), { ssr: false });
 
@@ -20,11 +16,8 @@ type ControlsCardProps = {
   mode: HighlightMode;
   codeText: string;
   tasks: Record<string, string>;
-  outerOnly: boolean;
-  supportsOuterOnly: boolean;
   onModeChange: (mode: HighlightMode) => void;
   onTaskSelect: (taskKey: string) => void;
-  onToggleOuter: (value: boolean) => void;
   onAddSelection: () => void;
   onHint: () => void;
   onClear: () => void;
@@ -36,57 +29,49 @@ export function ControlsCard({
   mode,
   codeText,
   tasks,
-  outerOnly,
-  supportsOuterOnly,
   onModeChange,
   onTaskSelect,
-  onToggleOuter,
   onAddSelection,
   onHint,
   onClear,
   onCheck,
   onMount,
 }: ControlsCardProps) {
+  const { t, i18n } = useTranslation("task001");
+
   return (
     <Card className="shadow-sm">
       <CardHeader className="space-y-3">
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <CardTitle className="flex items-center gap-2 text-xl">
             <Target className="w-5 h-5" />
-            Задание
+            {t("taskTitle")}
           </CardTitle>
           <div className="flex flex-wrap items-center gap-3">
             <div className="flex items-center gap-2">
-              <Switch
-                id="outerOnly"
-                checked={supportsOuterOnly ? outerOnly : false}
-                onCheckedChange={(value) => {
-                  if (supportsOuterOnly) onToggleOuter(value);
-                }}
-                disabled={!supportsOuterOnly}
-              />
-              <Label
-                htmlFor="outerOnly"
-                className={
-                  supportsOuterOnly
-                    ? "cursor-pointer"
-                    : "cursor-not-allowed text-neutral-400"
-                }
-              >
-                {supportsOuterOnly
-                  ? "Только внешние выражения"
-                  : "Только внешние (только для выражений)"}
-              </Label>
+              <span className="text-sm text-neutral-500">{t("language.label")}:</span>
+              {(["ru", "en"] as const).map((lng) => (
+                <Button
+                  key={lng}
+                  size="sm"
+                  variant={i18n.language === lng ? "default" : "outline"}
+                  onClick={() => {
+                    void i18n.changeLanguage(lng);
+                  }}
+                >
+                  {t(`language.${lng}`)}
+                </Button>
+              ))}
             </div>
             <Button variant="secondary" onClick={onHint}>
-              Подсказка
+              {t("hint")}
             </Button>
             <Button variant="ghost" onClick={onClear}>
-              Сбросить
+              {t("reset")}
             </Button>
             <Button onClick={onCheck} className="gap-2">
               <CheckCircle2 className="w-4 h-4" />
-              Проверить
+              {t("check")}
             </Button>
           </div>
         </div>
@@ -98,7 +83,7 @@ export function ControlsCard({
               variant={mode === item ? "default" : "outline"}
               onClick={() => onModeChange(item)}
             >
-              {MODE_CONFIG[item].label}
+              {t(MODE_CONFIG[item].labelKey)}
             </Button>
           ))}
         </div>
@@ -112,7 +97,7 @@ export function ControlsCard({
               variant={codeText === tasks[key] ? "default" : "outline"}
               onClick={() => onTaskSelect(key)}
             >
-              {key}
+              {t(TASK_LABEL_KEYS[key] ?? key)}
             </Button>
           ))}
         </div>
@@ -137,11 +122,11 @@ export function ControlsCard({
         <div className="mt-3 flex flex-wrap gap-2">
           <Button variant="outline" onClick={onAddSelection} className="gap-2">
             <Code2 className="w-4 h-4" />
-            Добавить текущую выделенную область
+            {t("addSelection")}
           </Button>
           <div className="text-sm text-neutral-600 flex items-center gap-2">
             <Info className="w-4 h-4" />
-            Выделите фрагмент в редакторе и нажмите «Добавить».
+            {t("selectionInfo")}
           </div>
         </div>
       </CardContent>

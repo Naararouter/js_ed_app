@@ -16,8 +16,7 @@ export type HighlightMode =
   | "literals";
 
 export type ModeConfig = {
-  label: string;
-  supportsOuterOnly?: boolean;
+  labelKey: string;
 };
 
 export type CollectOptions = {
@@ -50,14 +49,14 @@ const isBigIntLiteral = (node: t.Node): node is t.BigIntLiteral =>
     : false;
 
 export const MODE_CONFIG: Record<HighlightMode, ModeConfig> = {
-  expressions: { label: "Выражения", supportsOuterOnly: true },
-  identifiers: { label: "Идентификаторы" },
-  operators: { label: "Операторы" },
-  keywords: { label: "Ключевые слова" },
-  functionDefinitions: { label: "Опред. функций" },
-  functionCalls: { label: "Вызовы функций" },
-  objectKeys: { label: "Ключи объекта" },
-  literals: { label: "Литералы" },
+  expressions: { labelKey: "modes.expressions" },
+  identifiers: { labelKey: "modes.identifiers" },
+  operators: { labelKey: "modes.operators" },
+  keywords: { labelKey: "modes.keywords" },
+  functionDefinitions: { labelKey: "modes.functionDefinitions" },
+  functionCalls: { labelKey: "modes.functionCalls" },
+  objectKeys: { labelKey: "modes.objectKeys" },
+  literals: { labelKey: "modes.literals" },
 };
 
 export const MODE_ORDER: HighlightMode[] = [
@@ -82,15 +81,16 @@ const isTSDeclareFunction = (
 export function collectSpans(
   src: string,
   mode: HighlightMode,
-  { outermostOnly }: CollectOptions
+  options: CollectOptions = {}
 ): Span[] {
   const ast = parseCode(src) as unknown as t.File & { tokens?: BabelToken[] };
   const tokens = ast.tokens ?? [];
   let spans: Span[] = [];
+  const outermostOnly = Boolean(options.outermostOnly);
 
   switch (mode) {
     case "expressions":
-      spans = collectExpressionSpans(ast, Boolean(outermostOnly));
+      spans = collectExpressionSpans(ast, outermostOnly);
       break;
     case "identifiers":
       spans = collectIdentifierSpans(ast);
