@@ -94,6 +94,9 @@ interface PlaygroundState {
   createBranch: (branch: string) => GitCommandResult;
   checkoutCommit: (commitId: string) => GitCommandResult;
   headLabel: () => string;
+  listBranches: () => { name: string; commitId: string | null; isCurrent: boolean }[];
+  getCommitLog: (limit?: number) => CommitNode[];
+  hardReset: (target?: string) => GitCommandResult;
 }
 
 const ROOT_ID = "repo";
@@ -237,6 +240,11 @@ const sanitizePath = (raw: string) => {
   return cleaned.replace(/\/+$/, "") || "/";
 };
 
+interface ResolvedRef {
+  commitId: string;
+  branchName?: string;
+}
+
 function snapshotEntries(entries: Record<string, Entry>) {
   const snapshot: Record<string, string> = {};
   Object.values(entries).forEach((entry) => {
@@ -283,6 +291,22 @@ function applySnapshotToEntries(
 
 function generateCommitId() {
   return `c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+}
+
+function resolveRef(state: PlaygroundState, ref?: string): ResolvedRef | null {
+  if (!ref || ref === "HEAD") {
+    if (!state.headCommitId) return null;
+    return { commitId: state.headCommitId };
+  }
+  if (Object.prototype.hasOwnProperty.call(state.branches, ref)) {
+    const commitId = state.branches[ref];
+    if (!commitId) return null;
+    return { commitId, branchName: ref };
+  }
+  if (state.commitSnapshots[ref]) {
+    return { commitId: ref };
+  }
+  return null;
 }
 
 export const usePlaygroundStore = create<PlaygroundState>((set, get) => ({
@@ -497,6 +521,80 @@ export const usePlaygroundStore = create<PlaygroundState>((set, get) => ({
   },
   clearStage: () => {
     set({ stagedFileIds: [] });
+  },
+  hardReset: (target) => {
+    const state = get();
+    const resolved = resolveRef(state, target);
+    if (!resolved) {
+      return {
+        success: false,
+        output: [`fatal: reference '${target ?? "HEAD"}' not found`],
+      };
+    }
+    const snapshot = state.commitSnapshots[resolved.commitId];
+    if (!snapshot) {
+      return {
+        success: false,
+        output: [`fatal: snapshot for '${resolved.commitId}' missing`],
+      };
+    }
+    const { entries, activeFileId } = applySnapshotToEntries(
+      state.entries,
+      snapshot,
+      state.activeFileId
+    );
+    const branches = state.headDetached
+      ? { ...state.branches }
+      : { ...state.branches, [state.currentBranch]: resolved.commitId };
+    const timeline = appendEvent(state.timeline, {
+      id: createId(),
+      kind: "git",
+      label: `git reset --hard ${target ?? "HEAD"}`,
+      detail: resolved.commitId,
+      timestamp: Date.now(),
+    });
+    set({
+      entries,
+      activeFileId,
+      branches,
+      headCommitId: resolved.commitId,
+      headDetached: state.headDetached,
+      stagedFileIds: [],
+      timeline,
+    });
+    return {
+      success: true,
+      output: [
+        `HEAD is now at ${resolved.commitId}`,
+        "Working tree reset to snapshot.",
+      ],
+    };
+  },
+  listBranches: () => {
+    const state = get();
+    return Object.keys(state.branches)
+      .sort()
+      .map((name) => ({
+        name,
+        commitId: state.branches[name] ?? null,
+        isCurrent: !state.headDetached && state.currentBranch === name,
+      }));
+  },
+  getCommitLog: (limit = 10) => {
+    const state = get();
+    const commitMap = new Map(state.commits.map((commit) => [commit.id, commit]));
+    const log: CommitNode[] = [];
+    let current = state.headCommitId;
+    while (current && log.length < limit) {
+      const commit = commitMap.get(current);
+      if (!commit) break;
+      log.push(commit);
+      current = commit.parents[0];
+    }
+    if (log.length === 0) {
+      return [...state.commits].slice(-limit).reverse();
+    }
+    return log;
   },
   commitChanges: (message) => {
     const state = get();

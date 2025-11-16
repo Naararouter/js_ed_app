@@ -5,7 +5,13 @@ import { useCallback, useEffect, useRef } from "react";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 
-import { usePlaygroundStore, type Entry, type PlaygroundStore } from "../store";
+import {
+  usePlaygroundStore,
+  type CommitNode,
+  type Entry,
+  type GitCommandResult,
+  type PlaygroundStore,
+} from "../store";
 
 const PROMPT = "git-lab$ ";
 
@@ -13,6 +19,8 @@ export function TerminalPanel() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const bufferRef = useRef("");
+  const historyRef = useRef<string[]>([]);
+  const historyIndexRef = useRef(0);
 
   const runCommand = useCommandProcessor();
 
@@ -40,7 +48,15 @@ export function TerminalPanel() {
     term.write(PROMPT);
 
     const disposable = term.onData((data) => {
-      handleData(data, term, bufferRef, runCommand, writePrompt);
+      handleData(
+        data,
+        term,
+        bufferRef,
+        historyRef,
+        historyIndexRef,
+        runCommand,
+        writePrompt
+      );
     });
 
     const resizeObserver = new ResizeObserver(() => {
@@ -70,6 +86,8 @@ function handleData(
   data: string,
   term: Terminal,
   bufferRef: React.MutableRefObject<string>,
+  historyRef: React.MutableRefObject<string[]>,
+  historyIndexRef: React.MutableRefObject<number>,
   runCommand: (input: string) => string[],
   writePrompt: () => void
 ) {
@@ -87,9 +105,19 @@ function handleData(
         writePrompt();
         return;
       }
+      if (input.length > 0) {
+        historyRef.current.push(input);
+        historyIndexRef.current = historyRef.current.length;
+      }
       const output = runCommand(input);
       output.forEach((line) => term.writeln(line));
       writePrompt();
+      return;
+    case "\u001b[A":
+      navigateHistory(-1, term, bufferRef, historyRef, historyIndexRef);
+      return;
+    case "\u001b[B":
+      navigateHistory(1, term, bufferRef, historyRef, historyIndexRef);
       return;
     case "\u007F": {
       if (bufferRef.current.length === 0) return;
@@ -101,6 +129,23 @@ function handleData(
       bufferRef.current += data;
       term.write(data);
   }
+}
+
+function navigateHistory(
+  direction: number,
+  term: Terminal,
+  bufferRef: React.MutableRefObject<string>,
+  historyRef: React.MutableRefObject<string[]>,
+  historyIndexRef: React.MutableRefObject<number>
+) {
+  const history = historyRef.current;
+  if (history.length === 0) return;
+  let nextIndex = historyIndexRef.current + direction;
+  nextIndex = Math.max(0, Math.min(history.length, nextIndex));
+  historyIndexRef.current = nextIndex;
+  const value = history[nextIndex] ?? "";
+  bufferRef.current = value;
+  term.write(`\x1b[2K\r${PROMPT}${value}`);
 }
 
 function useCommandProcessor() {
@@ -115,6 +160,10 @@ function useCommandProcessor() {
   const createBranch = usePlaygroundStore((state) => state.createBranch);
   const checkoutCommit = usePlaygroundStore((state) => state.checkoutCommit);
   const headLabel = usePlaygroundStore((state) => state.headLabel);
+  const listBranches = usePlaygroundStore((state) => state.listBranches);
+  const getCommitLog = usePlaygroundStore((state) => state.getCommitLog);
+  const hardReset = usePlaygroundStore((state) => state.hardReset);
+  const clearStage = usePlaygroundStore((state) => state.clearStage);
 
   return useCallback(
     (input: string) => {
@@ -125,7 +174,7 @@ function useCommandProcessor() {
           return [
             "Available commands:",
             "help, ls [path], open <path>, cat <path>, touch <name>, mkdir <name>",
-            "git commands: status, add, commit, checkout, switch",
+            "git commands: status, add, commit, checkout, switch, branch, log, reset",
           ];
         case "ls": {
           const target = tokens[0] ?? "/";
@@ -182,6 +231,7 @@ function useCommandProcessor() {
           return runGitCommand({
             tokens,
             stageEntryIds,
+            clearStage,
             stageAllDirty,
             commitChanges,
             checkoutBranch,
@@ -190,6 +240,9 @@ function useCommandProcessor() {
             getEntryByPath,
             headLabel,
             logEvent,
+            listBranches,
+            getCommitLog,
+            hardReset,
           });
         }
         default:
@@ -199,11 +252,15 @@ function useCommandProcessor() {
     [
       checkoutBranch,
       checkoutCommit,
+      clearStage,
       commitChanges,
       createBranch,
       createEntry,
+      getCommitLog,
       getEntryByPath,
+      hardReset,
       headLabel,
+      listBranches,
       logEvent,
       selectFile,
       stageAllDirty,
@@ -215,6 +272,7 @@ function useCommandProcessor() {
 function runGitCommand({
   tokens,
   stageEntryIds,
+  clearStage,
   stageAllDirty,
   commitChanges,
   checkoutBranch,
@@ -223,9 +281,13 @@ function runGitCommand({
   getEntryByPath,
   headLabel,
   logEvent,
+  listBranches,
+  getCommitLog,
+  hardReset,
 }: {
   tokens: string[];
   stageEntryIds: (ids: string[]) => string[];
+  clearStage: () => void;
   stageAllDirty: () => string[];
   commitChanges: (message: string) => { success: boolean; output: string[] };
   checkoutBranch: (branch: string) => { success: boolean; output: string[] };
@@ -234,6 +296,9 @@ function runGitCommand({
   getEntryByPath: (path: string) => Entry | null;
   headLabel: () => string;
   logEvent: PlaygroundStore["logEvent"];
+  listBranches: () => { name: string; commitId: string | null; isCurrent: boolean }[];
+  getCommitLog: (limit?: number) => CommitNode[];
+  hardReset: (target?: string) => GitCommandResult;
 }): string[] {
   if (tokens.length === 0) {
     return ["usage: git <command>"];
@@ -305,6 +370,69 @@ function runGitCommand({
       }
       return checkoutBranch(tokens[0]).output;
     }
+    case "branch": {
+      if (tokens.length === 0) {
+        const branches = listBranches();
+        if (branches.length === 0) return ["No branches created yet."];
+        return branches.map((branch) => {
+          const marker = branch.isCurrent ? "*" : " ";
+          const suffix = branch.commitId ? ` (${branch.commitId})` : "";
+          return `${marker} ${branch.name}${suffix}`;
+        });
+      }
+      const name = tokens[0];
+      const result = createBranch(name);
+      if (result.success) {
+        logEvent({ kind: "git", label: `git branch ${name}` });
+      }
+      return result.output;
+    }
+    case "log": {
+      let limit = 10;
+      const nIndex = tokens.indexOf("-n");
+      if (nIndex !== -1 && tokens[nIndex + 1]) {
+        const parsed = Number(tokens[nIndex + 1]);
+        if (!Number.isNaN(parsed) && parsed > 0) {
+          limit = parsed;
+        }
+      }
+      const commits = getCommitLog(limit);
+      if (commits.length === 0) {
+        return ["No commits yet. Make one with git commit -m \"message\"."];
+      }
+      logEvent({ kind: "git", label: "git log" });
+      const lines: string[] = [];
+      commits.forEach((commit, index) => {
+        lines.push(`commit ${commit.id}`);
+        lines.push(`Author: ${commit.author}`);
+        lines.push(`Date:   ${formatLogDate(commit.timestamp)}`);
+        lines.push("");
+        lines.push(`    ${commit.message}`);
+        if (index !== commits.length - 1) {
+          lines.push("");
+        }
+      });
+      return lines;
+    }
+    case "reset": {
+      if (tokens.length === 0) {
+        clearStage();
+        return ["Unstaged all files (mixed reset)."];
+      }
+      if (tokens[0] === "--hard") {
+        const target = tokens[1];
+        const result = hardReset(target);
+        if (result.success) {
+          logEvent({
+            kind: "git",
+            label: "git reset --hard",
+            detail: target ?? "HEAD",
+          });
+        }
+        return result.output;
+      }
+      return ["Supported reset commands: git reset, git reset --hard [ref]"];
+    }
     default:
       return [`git: '${sub}' is not supported yet.`];
   }
@@ -364,6 +492,15 @@ function formatGitStatus(headLabel: string) {
     lines.push("nothing to commit, working tree clean");
   }
   return lines;
+}
+
+const LOG_DATE_FORMATTER = new Intl.DateTimeFormat("en", {
+  dateStyle: "medium",
+  timeStyle: "short",
+});
+
+function formatLogDate(timestamp: number) {
+  return LOG_DATE_FORMATTER.format(timestamp);
 }
 
 function collectVisibleFileIds(entry: Entry, entries: Record<string, Entry>) {
