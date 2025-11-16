@@ -12,6 +12,7 @@ import {
   type Entry,
   type GitCommandResult,
   type PlaygroundStore,
+  type RemoteRepo,
 } from "../store";
 
 const PROMPT = "git-lab$ ";
@@ -169,72 +170,100 @@ function useCommandProcessor() {
   const deleteBranch = usePlaygroundStore((state) => state.deleteBranch);
   const isRepoInitialized = usePlaygroundStore((state) => state.isRepoInitialized);
   const initializeRepo = usePlaygroundStore((state) => state.initializeRepo);
+  const addRemote = usePlaygroundStore((state) => state.addRemote);
+  const pushRemote = usePlaygroundStore((state) => state.pushRemote);
+  const fetchRemote = usePlaygroundStore((state) => state.fetchRemote);
+  const pullRemote = usePlaygroundStore((state) => state.pullRemote);
+  const registerCommand = usePlaygroundStore((state) => state.registerCommand);
+  const remotes = usePlaygroundStore((state) => state.remotes);
 
   return useCallback(
     (input: string) => {
       const tokens = tokenize(input);
       const command = tokens.shift()?.toLowerCase() ?? "";
+      let result: string[];
       switch (command) {
         case "help":
-          return [
+          result = [
             "Available commands:",
             "help, ls [path], open <path>, cat <path>, touch <name>, mkdir <name>",
-            "git commands: status, add, commit, checkout, switch, branch, log, reset",
+            "git commands: init, status, add, commit, checkout, switch, branch, log, reset, remote, push, fetch, pull",
           ];
+          break;
         case "ls": {
           const target = tokens[0] ?? "/";
           const entry = getEntryByPath(target);
-          if (!entry || entry.hidden)
-            return [`ls: cannot access '${target}': No such entry`];
+          if (!entry || entry.hidden) {
+            result = [`ls: cannot access '${target}': No such entry`];
+            break;
+          }
           if (entry.type === "file") {
-            return [entry.name];
+            result = [entry.name];
+            break;
           }
           const children = entry.children
             .map((childId) => usePlaygroundStore.getState().entries[childId])
-            .filter(
-              (child): child is Entry =>
-                Boolean(child && !child.hidden)
-            )
+            .filter((child): child is Entry => Boolean(child && !child.hidden))
             .map((child) =>
               child!.type === "directory" ? `${child!.name}/` : child!.name
             );
           logEvent({ kind: "command", label: `ls ${target}` });
-          return children.length ? children : ["(empty)"];
+          result = children.length ? children : ["(empty)"];
+          break;
         }
         case "open": {
           const target = tokens[0];
-          if (!target) return ["Usage: open <path>"];
+          if (!target) {
+            result = ["Usage: open <path>"];
+            break;
+          }
           const entry = getEntryByPath(target);
           if (!entry || entry.type !== "file" || entry.hidden) {
-            return [`open: ${target} is not a file`];
+            result = [`open: ${target} is not a file`];
+            break;
           }
           selectFile(entry.id);
           logEvent({ kind: "command", label: `Opened ${entry.path}` });
-          return [`Opened ${entry.path}`];
+          result = [`Opened ${entry.path}`];
+          break;
         }
         case "cat": {
           const target = tokens[0];
-          if (!target) return ["Usage: cat <path>"];
+          if (!target) {
+            result = ["Usage: cat <path>"];
+            break;
+          }
           const entry = getEntryByPath(target);
-          if (!entry || entry.type !== "file" || entry.hidden)
-            return [`cat: ${target}: not a file`];
+          if (!entry || entry.type !== "file" || entry.hidden) {
+            result = [`cat: ${target}: not a file`];
+            break;
+          }
           logEvent({ kind: "command", label: `Cat ${entry.path}` });
-          return entry.content.split("\n");
+          result = entry.content.split("\n");
+          break;
         }
         case "touch": {
           const name = tokens[0];
-          if (!name) return ["Usage: touch <name>"];
+          if (!name) {
+            result = ["Usage: touch <name>"];
+            break;
+          }
           createEntry(usePlaygroundStore.getState().rootId, name, "file");
-          return [`Created file ${name}`];
+          result = [`Created file ${name}`];
+          break;
         }
         case "mkdir": {
           const name = tokens[0];
-          if (!name) return ["Usage: mkdir <name>"];
+          if (!name) {
+            result = ["Usage: mkdir <name>"];
+            break;
+          }
           createEntry(usePlaygroundStore.getState().rootId, name, "directory");
-          return [`Created directory ${name}`];
+          result = [`Created directory ${name}`];
+          break;
         }
-        case "git": {
-          return runGitCommand({
+        case "git":
+          result = runGitCommand({
             tokens,
             stageEntryIds,
             clearStage,
@@ -253,13 +282,21 @@ function useCommandProcessor() {
             hardReset,
             initializeRepo,
             isRepoInitialized,
+            addRemote,
+            pushRemote,
+            fetchRemote,
+            pullRemote,
+            remotes,
           });
-        }
+          break;
         default:
-          return [`Command not found: ${command}`];
+          result = [`Command not found: ${command}`];
       }
+      registerCommand(input);
+      return result;
     },
     [
+      addRemote,
       checkoutBranch,
       checkoutCommit,
       clearStage,
@@ -268,9 +305,14 @@ function useCommandProcessor() {
       deleteBranch,
       initializeRepo,
       createEntry,
+      fetchRemote,
       getCommitLog,
       getEntryByPath,
       isRepoInitialized,
+      pullRemote,
+      pushRemote,
+      registerCommand,
+      remotes,
       renameBranch,
       hardReset,
       headLabel,
@@ -302,6 +344,11 @@ function runGitCommand({
   hardReset,
   initializeRepo,
   isRepoInitialized,
+  addRemote,
+  pushRemote,
+  fetchRemote,
+  pullRemote,
+  remotes,
 }: {
   tokens: string[];
   stageEntryIds: (ids: string[]) => string[];
@@ -321,6 +368,11 @@ function runGitCommand({
   hardReset: (target?: string) => GitCommandResult;
   initializeRepo: () => GitCommandResult;
   isRepoInitialized: boolean;
+  addRemote: (name: string, url: string) => GitCommandResult;
+  pushRemote: (remote: string, branch: string) => GitCommandResult;
+  fetchRemote: (remote: string) => GitCommandResult;
+  pullRemote: (remote: string, branch: string) => GitCommandResult;
+  remotes: Record<string, RemoteRepo>;
 }): string[] {
   if (tokens.length === 0) {
     return ["usage: git <command>"];
@@ -501,6 +553,43 @@ function runGitCommand({
         return result.output;
       }
       return ["Supported reset commands: git reset, git reset --hard [ref]"];
+    }
+    case "remote": {
+      const subcommand = tokens[0];
+      if (!subcommand || subcommand === "-v") {
+        const names = Object.values(remotes);
+        if (names.length === 0) return ["No remotes configured."];
+        const lines: string[] = [];
+        names.forEach((remote) => {
+          lines.push(`${remote.name}\t${remote.url} (fetch)`);
+          lines.push(`${remote.name}\t${remote.url} (push)`);
+        });
+        return lines;
+      }
+      if (subcommand === "add") {
+        const name = tokens[1];
+        const url = tokens[2];
+        if (!name || !url) return ["usage: git remote add <name> <url>"];
+        return addRemote(name, url).output;
+      }
+      return ["Supported remote commands: git remote -v, git remote add <name> <url>"];
+    }
+    case "push": {
+      const remoteName = tokens[0];
+      const branch = tokens[1];
+      if (!remoteName || !branch) return ["usage: git push <remote> <branch>"];
+      return pushRemote(remoteName, branch).output;
+    }
+    case "fetch": {
+      const remoteName = tokens[0];
+      if (!remoteName) return ["usage: git fetch <remote>"];
+      return fetchRemote(remoteName).output;
+    }
+    case "pull": {
+      const remoteName = tokens[0];
+      const branch = tokens[1];
+      if (!remoteName || !branch) return ["usage: git pull <remote> <branch>"];
+      return pullRemote(remoteName, branch).output;
     }
     default:
       return [`git: '${sub}' is not supported yet.`];

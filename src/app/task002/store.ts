@@ -32,11 +32,25 @@ export interface FileEntry extends BaseEntry {
 
 export type Entry = DirectoryEntry | FileEntry;
 
+export type HintLevel = "light" | "medium" | "major";
+
+export interface TaskHintState {
+  targetCommand: string;
+  revealedChars: number;
+  revealedWords: number;
+  majorRevealed: boolean;
+  usage: Record<HintLevel, number>;
+  lastMessage?: string;
+  lastLevel?: HintLevel;
+}
+
 export interface Task {
   id: string;
   title: string;
-  detail: string;
+  description: string;
+  command: string;
   done: boolean;
+  hint: TaskHintState;
 }
 
 export interface Hint {
@@ -66,6 +80,14 @@ export interface GitCommandResult {
   output: string[];
 }
 
+export interface RemoteRepo {
+  name: string;
+  url: string;
+  branches: Record<string, string | null>;
+  commits: CommitNode[];
+  commitSnapshots: Record<string, Record<string, string>>;
+}
+
 interface ScenarioStateShape {
   entries: Record<string, Entry>;
   rootId: string;
@@ -82,6 +104,7 @@ interface ScenarioStateShape {
   headDetached: boolean;
   stagedFileIds: string[];
   isRepoInitialized: boolean;
+  remotes: Record<string, RemoteRepo>;
 }
 
 interface ScenarioMeta {
@@ -97,6 +120,56 @@ interface ScenarioDefinition extends ScenarioMeta {
 
 export const NOT_A_REPO_MESSAGE =
   "fatal: not a git repository (or any of the parent directories): .git";
+
+const normalizeCommand = (input: string) =>
+  input.trim().replace(/\s+/g, " ");
+
+const createTask = (config: {
+  id: string;
+  title: string;
+  description: string;
+  command: string;
+}): Task => ({
+  id: config.id,
+  title: config.title,
+  description: config.description,
+  command: config.command.trim(),
+  done: false,
+  hint: {
+    targetCommand: config.command.trim(),
+    revealedChars: 0,
+    revealedWords: 0,
+    majorRevealed: false,
+    usage: { light: 0, medium: 0, major: 0 },
+  },
+});
+
+const cloneCommits = (commits: CommitNode[]): CommitNode[] =>
+  commits.map((commit) => ({ ...commit }));
+
+const cloneSnapshots = (
+  snapshots: Record<string, Record<string, string>>
+): Record<string, Record<string, string>> => {
+  const copy: Record<string, Record<string, string>> = {};
+  for (const [key, snapshot] of Object.entries(snapshots)) {
+    copy[key] = { ...snapshot };
+  }
+  return copy;
+};
+
+const createRemoteFromLocal = (
+  name: string,
+  url: string,
+  commits: CommitNode[],
+  commitSnapshots: Record<string, Record<string, string>>,
+  branches: Record<string, string | null>
+): RemoteRepo => ({
+  name,
+  url,
+  branches: { ...branches },
+  commits: cloneCommits(commits),
+  commitSnapshots: cloneSnapshots(commitSnapshots),
+});
 
 interface PlaygroundState {
   entries: Record<string, Entry>;
@@ -116,21 +189,26 @@ interface PlaygroundState {
   isRepoInitialized: boolean;
   scenarioId: string;
   scenarioCatalog: ScenarioMeta[];
+  remotes: Record<string, RemoteRepo>;
   selectFile: (id: string) => void;
   updateFileContent: (id: string, content: string) => void;
   createEntry: (parentId: string, name: string, type: EntryType) => void;
   deleteEntry: (id: string) => void;
   logEvent: (event: Omit<TimelineEvent, "id" | "timestamp"> & { timestamp?: number }) => void;
-  toggleTask: (id: string) => void;
-  viewHint: (id: string) => void;
   getEntryByPath: (path: string) => Entry | null;
   stageEntryIds: (ids: string[]) => string[];
   stageAllDirty: () => string[];
   unstageEntryIds: (ids: string[]) => string[];
   clearStage: () => void;
   renameEntry: (id: string, name: string) => boolean;
+  registerCommand: (command: string) => void;
+  requestHint: (taskId: string, level: HintLevel) => void;
   loadScenario: (id: string) => void;
   initializeRepo: () => GitCommandResult;
+  addRemote: (name: string, url: string) => GitCommandResult;
+  pushRemote: (remote: string, branch: string) => GitCommandResult;
+  fetchRemote: (remote: string) => GitCommandResult;
+  pullRemote: (remote: string, branch: string) => GitCommandResult;
   commitChanges: (message: string) => GitCommandResult;
   checkoutBranch: (branch: string) => GitCommandResult;
   createBranch: (branch: string) => GitCommandResult;
@@ -354,43 +432,27 @@ function buildMentorScenario(): ScenarioStateShape {
   };
 
   const tasks: Task[] = [
-    {
-      id: "task-1",
-      title: "Explore the repo",
-      detail: "Read README.md and inspect src/main.ts.",
-      done: false,
-    },
-    {
-      id: "task-2",
-      title: "Practice file edits",
-      detail: "Modify journal.md and note the timeline update.",
-      done: false,
-    },
-    {
-      id: "task-3",
-      title: "Review git graph",
-      detail: "Select a commit in the graph to see metadata.",
-      done: false,
-    },
+    createTask({
+      id: "mentor-status",
+      title: "Inspect repository status",
+      description: "Run `git status` to view the tracked files.",
+      command: "git status",
+    }),
+    createTask({
+      id: "mentor-stage-readme",
+      title: "Stage README.md",
+      description: "Use git add to stage README.md for commit.",
+      command: "git add README.md",
+    }),
+    createTask({
+      id: "mentor-log",
+      title: "Review commit log",
+      description: "Use git log to inspect commit history.",
+      command: "git log",
+    }),
   ];
 
-  const hints: Hint[] = [
-    {
-      id: "hint-1",
-      title: "Getting started",
-      body: "Use the terminal to run `ls` and see folders. Type `help` to view available commands.",
-    },
-    {
-      id: "hint-2",
-      title: "Editing files",
-      body: "Select a file in the tree, edit in Monaco, and the dirty badge will reflect unsaved changes vs. baseline.",
-    },
-    {
-      id: "hint-3",
-      title: "Graph insight",
-      body: "Click commits in the graph to sync the details panel and timeline.",
-    },
-  ];
+  const hints: Hint[] = [];
 
   const commitId = "c1";
   const commits: CommitNode[] = [
@@ -403,6 +465,16 @@ function buildMentorScenario(): ScenarioStateShape {
     },
   ];
   const commitSnapshots = { [commitId]: snapshotEntries(entries) };
+
+  const remotes: Record<string, RemoteRepo> = {
+    origin: createRemoteFromLocal(
+      "origin",
+      "https://example.com/mentor.git",
+      commits,
+      commitSnapshots,
+      { main: commitId }
+    ),
+  };
 
   return {
     entries,
@@ -428,6 +500,7 @@ function buildMentorScenario(): ScenarioStateShape {
     headDetached: false,
     stagedFileIds: [],
     isRepoInitialized: true,
+    remotes,
   };
 }
 
@@ -462,43 +535,33 @@ function buildGitInitScenario(): ScenarioStateShape {
   };
 
   const tasks: Task[] = [
-    {
+    createTask({
       id: "init-1",
       title: "Initialize repository",
-      detail: "Run `git init` inside the terminal.",
-      done: false,
-    },
-    {
+      description: "Run `git init` inside the terminal.",
+      command: "git init",
+    }),
+    createTask({
       id: "init-2",
-      title: "Stage your first file",
-      detail: "Create README.md and add it to the index.",
-      done: false,
-    },
-    {
+      title: "Create README",
+      description: "Create a README file using touch.",
+      command: "touch README.md",
+    }),
+    createTask({
       id: "init-3",
-      title: "Make an initial commit",
-      detail: "Commit the staged README.md with a meaningful message.",
-      done: false,
-    },
+      title: "Stage README",
+      description: "Add README.md to the staging area.",
+      command: "git add README.md",
+    }),
+    createTask({
+      id: "init-4",
+      title: "Initial commit",
+      description: "Commit README.md with a message.",
+      command: 'git commit -m "feat: initial commit"',
+    }),
   ];
 
-  const hints: Hint[] = [
-    {
-      id: "init-hint-1",
-      title: "Start the repo",
-      body: "Inside the terminal run `git init` to create a new repository in this workspace.",
-    },
-    {
-      id: "init-hint-2",
-      title: "Add files",
-      body: "Use `touch README.md` and `git add README.md` after initializing.",
-    },
-    {
-      id: "init-hint-3",
-      title: "First commit",
-      body: "Once staged, run `git commit -m \"feat: initial commit\"`.",
-    },
-  ];
+  const hints: Hint[] = [];
 
   return {
     entries,
@@ -524,6 +587,7 @@ function buildGitInitScenario(): ScenarioStateShape {
     headDetached: false,
     stagedFileIds: [],
     isRepoInitialized: false,
+    remotes: {},
   };
 }
 
@@ -699,23 +763,6 @@ export const usePlaygroundStore = create<PlaygroundState>((set, get) => ({
       return { timeline };
     });
   },
-  toggleTask: (id) => {
-    set((state) => {
-      const tasks = state.tasks.map((task) =>
-        task.id === id ? { ...task, done: !task.done } : task
-      );
-      return { tasks };
-    });
-  },
-  viewHint: (id) => {
-    const hint = get().hints.find((item) => item.id === id);
-    if (!hint) return;
-    set({ activeHintId: id });
-    get().logEvent({
-      kind: "hint",
-      label: `Viewed hint: ${hint.title}`,
-    });
-  },
   getEntryByPath: (path) => {
     const state = get();
     const normalized = sanitizePath(path);
@@ -835,6 +882,73 @@ export const usePlaygroundStore = create<PlaygroundState>((set, get) => ({
     set({ entries: updatedEntries, timeline });
     return true;
   },
+  registerCommand: (command) => {
+    const normalized = normalizeCommand(command);
+    set((state) => {
+      let updated = false;
+      const tasks = state.tasks.map((task) => {
+        if (!task.done && normalizeCommand(task.command) === normalized) {
+          updated = true;
+          return { ...task, done: true };
+        }
+        return task;
+      });
+      if (!updated) return state;
+      const timeline = appendEvent(state.timeline, {
+        id: createId(),
+        kind: "command",
+        label: "Task completed",
+        detail: `Matched command: ${command}`,
+        timestamp: Date.now(),
+      });
+      return { tasks, timeline };
+    });
+  },
+  requestHint: (taskId, level) => {
+    set((state) => {
+      let messageDetail = "";
+      let matched = false;
+      const tasks = state.tasks.map((task) => {
+        if (task.id !== taskId) return task;
+        matched = true;
+        const hint = { ...task.hint };
+        const target = hint.targetCommand;
+        hint.usage[level] = (hint.usage[level] ?? 0) + 1;
+        if (level === "light") {
+          if (hint.revealedChars >= target.length) {
+            messageDetail = "All characters revealed.";
+          } else {
+            const nextChar = target[hint.revealedChars];
+            hint.revealedChars += 1;
+            messageDetail = `Next char: ${nextChar}`;
+          }
+        } else if (level === "medium") {
+          const words = target.split(/\s+/).filter(Boolean);
+          if (hint.revealedWords >= words.length) {
+            messageDetail = "All words revealed.";
+          } else {
+            messageDetail = `Next word: ${words[hint.revealedWords]}`;
+            hint.revealedWords += 1;
+          }
+        } else {
+          hint.majorRevealed = true;
+          messageDetail = `Command: ${target}`;
+        }
+        hint.lastMessage = messageDetail;
+        hint.lastLevel = level;
+        return { ...task, hint };
+      });
+      if (!matched) return state;
+      const timeline = appendEvent(state.timeline, {
+        id: createId(),
+        kind: "hint",
+        label: `Hint used (${level})`,
+        detail: messageDetail,
+        timestamp: Date.now(),
+      });
+      return { tasks, timeline };
+    });
+  },
   loadScenario: (scenarioId) => {
     const definition = SCENARIOS.find((scenario) => scenario.id === scenarioId);
     if (!definition) return;
@@ -877,6 +991,156 @@ export const usePlaygroundStore = create<PlaygroundState>((set, get) => ({
         "Initialized empty Git repository in /home/git-playground/.git/",
         "You can start staging files immediately.",
       ],
+    };
+  },
+  addRemote: (name, url) => {
+    const trimmedName = name.trim();
+    const trimmedUrl = url.trim();
+    if (!trimmedName || !trimmedUrl) {
+      return { success: false, output: ["usage: git remote add <name> <url>"] };
+    }
+    const state = get();
+    if (state.remotes[trimmedName]) {
+      return { success: false, output: [`fatal: remote '${trimmedName}' already exists`] };
+    }
+    const remote: RemoteRepo = {
+      name: trimmedName,
+      url: trimmedUrl,
+      branches: {},
+      commits: [],
+      commitSnapshots: {},
+    };
+    const remotes = { ...state.remotes, [trimmedName]: remote };
+    const timeline = appendEvent(state.timeline, {
+      id: createId(),
+      kind: "command",
+      label: `Added remote ${trimmedName}`,
+      detail: trimmedUrl,
+      timestamp: Date.now(),
+    });
+    set({ remotes, timeline });
+    return { success: true, output: [`Added remote '${trimmedName}'`] };
+  },
+  pushRemote: (remoteName, branch) => {
+    const state = get();
+    if (!state.isRepoInitialized) {
+      return { success: false, output: [NOT_A_REPO_MESSAGE] };
+    }
+    const remote = state.remotes[remoteName];
+    if (!remote) {
+      return { success: false, output: [`fatal: '${remoteName}' does not appear to be a git repository`] };
+    }
+    const head = state.branches[branch];
+    if (!head) {
+      return { success: false, output: [`error: branch '${branch}' not found`] };
+    }
+    const remoteCommitIds = new Set(remote.commits.map((commit) => commit.id));
+    const commitsToPush = state.commits.filter((commit) => !remoteCommitIds.has(commit.id));
+    const nextSnapshots = { ...remote.commitSnapshots };
+    commitsToPush.forEach((commit) => {
+      nextSnapshots[commit.id] = { ...state.commitSnapshots[commit.id] };
+    });
+    const nextRemote: RemoteRepo = {
+      ...remote,
+      commits: [...remote.commits, ...cloneCommits(commitsToPush)],
+      commitSnapshots: nextSnapshots,
+      branches: { ...remote.branches, [branch]: head },
+    };
+    const remotes = { ...state.remotes, [remoteName]: nextRemote };
+    const timeline = appendEvent(state.timeline, {
+      id: createId(),
+      kind: "git",
+      label: `git push ${remoteName} ${branch}`,
+      detail: `${commitsToPush.length} commit(s) pushed`,
+      timestamp: Date.now(),
+    });
+    set({ remotes, timeline });
+    return {
+      success: true,
+      output: [`Pushed ${commitsToPush.length} commit(s) to ${remoteName}/${branch}`],
+    };
+  },
+  fetchRemote: (remoteName) => {
+    const state = get();
+    if (!state.isRepoInitialized) {
+      return { success: false, output: [NOT_A_REPO_MESSAGE] };
+    }
+    const remote = state.remotes[remoteName];
+    if (!remote) {
+      return { success: false, output: [`fatal: '${remoteName}' not found`] };
+    }
+    const localCommitIds = new Set(state.commits.map((commit) => commit.id));
+    const incoming = remote.commits.filter((commit) => !localCommitIds.has(commit.id));
+    if (incoming.length === 0) {
+      return { success: true, output: [`From ${remoteName}`, "Already up to date."] };
+    }
+    const commits = [...state.commits, ...cloneCommits(incoming)];
+    const commitSnapshots = {
+      ...state.commitSnapshots,
+    };
+    incoming.forEach((commit) => {
+      commitSnapshots[commit.id] = {
+        ...remote.commitSnapshots[commit.id],
+      };
+    });
+    const branches = { ...state.branches };
+    Object.entries(remote.branches).forEach(([branch, head]) => {
+      branches[`${remoteName}/${branch}`] = head ?? null;
+    });
+    const timeline = appendEvent(state.timeline, {
+      id: createId(),
+      kind: "git",
+      label: `git fetch ${remoteName}`,
+      detail: `${incoming.length} commit(s) fetched`,
+      timestamp: Date.now(),
+    });
+    set({ commits, commitSnapshots, branches, timeline });
+    return {
+      success: true,
+      output: [`Fetched ${incoming.length} commit(s) from ${remoteName}`],
+    };
+  },
+  pullRemote: (remoteName, branch) => {
+    const fetchResult = get().fetchRemote(remoteName);
+    if (!fetchResult.success) return fetchResult;
+    const state = get();
+    const remote = state.remotes[remoteName];
+    if (!remote) {
+      return { success: false, output: [`fatal: '${remoteName}' not found`] };
+    }
+    const remoteHead = remote.branches[branch];
+    if (!remoteHead) {
+      return { success: false, output: [`error: ${remoteName}/${branch} has no commits`] };
+    }
+    const snapshot = state.commitSnapshots[remoteHead];
+    if (!snapshot) {
+      return { success: false, output: [`error: missing snapshot for ${remoteHead}`] };
+    }
+    const { entries, activeFileId } = applySnapshotToEntries(
+      state.entries,
+      snapshot,
+      state.activeFileId
+    );
+    const branches = { ...state.branches, [branch]: remoteHead };
+    const timeline = appendEvent(state.timeline, {
+      id: createId(),
+      kind: "git",
+      label: `git pull ${remoteName} ${branch}`,
+      detail: "Fast-forwarded to remote HEAD.",
+      timestamp: Date.now(),
+    });
+    set({
+      entries,
+      activeFileId,
+      branches,
+      headCommitId: remoteHead,
+      headDetached: false,
+      stagedFileIds: [],
+      timeline,
+    });
+    return {
+      success: true,
+      output: [`Fast-forwarded to ${remoteName}/${branch}`],
     };
   },
   hardReset: (target) => {
