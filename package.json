@@ -14,6 +14,7 @@
     "@babel/types": "^7.28.4",
     "@isomorphic-git/lightning-fs": "^4.6.2",
     "@monaco-editor/react": "^4.7.0",
+    "@radix-ui/react-context-menu": "^2.2.16",
     "@radix-ui/react-label": "^2.1.7",
     "@radix-ui/react-slot": "^1.2.3",
     "@radix-ui/react-switch": "^1.2.6",

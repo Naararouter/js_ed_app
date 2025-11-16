@@ -88,7 +88,9 @@ interface PlaygroundState {
   getEntryByPath: (path: string) => Entry | null;
   stageEntryIds: (ids: string[]) => string[];
   stageAllDirty: () => string[];
+  unstageEntryIds: (ids: string[]) => string[];
   clearStage: () => void;
+  renameEntry: (id: string, name: string) => boolean;
   commitChanges: (message: string) => GitCommandResult;
   checkoutBranch: (branch: string) => GitCommandResult;
   createBranch: (branch: string) => GitCommandResult;
@@ -311,6 +313,32 @@ function resolveRef(state: PlaygroundState, ref?: string): ResolvedRef | null {
   return null;
 }
 
+function recomputePaths(entries: Record<string, Entry>, startId: string) {
+  const nextEntries = { ...entries };
+  const update = (id: string) => {
+    const entry = nextEntries[id];
+    if (!entry) return;
+    const parentId = entry.parentId;
+    let basePath = "/";
+    if (parentId != null) {
+      const parent = nextEntries[parentId];
+      const parentPath = parent?.path ?? "/";
+      basePath = parentPath === "/" ? `/${entry.name}` : `${parentPath}/${entry.name}`;
+    }
+    if (parentId == null) {
+      basePath = "/";
+    }
+    if (entry.type === "file") {
+      nextEntries[id] = { ...entry, path: basePath };
+    } else {
+      nextEntries[id] = { ...entry, path: basePath, children: [...entry.children] };
+      entry.children.forEach((childId) => update(childId));
+    }
+  };
+  update(startId);
+  return nextEntries;
+}
+
 export const usePlaygroundStore = create<PlaygroundState>((set, get) => ({
   entries: initialEntries,
   rootId: ROOT_ID,
@@ -521,8 +549,58 @@ export const usePlaygroundStore = create<PlaygroundState>((set, get) => ({
       .map((entry) => entry.id);
     return state.stageEntryIds(dirtyIds);
   },
+  unstageEntryIds: (ids) => {
+    const state = get();
+    const staged = new Set(state.stagedFileIds);
+    const removed: string[] = [];
+    ids.forEach((id) => {
+      if (!staged.has(id)) return;
+      staged.delete(id);
+      const entry = state.entries[id];
+      if (entry && entry.type === "file") {
+        removed.push(entry.path);
+      }
+    });
+    if (removed.length === 0) {
+      return [];
+    }
+    const timeline = appendEvent(state.timeline, {
+      id: createId(),
+      kind: "git",
+      label: `Unstaged ${removed.length} file(s)`,
+      detail: removed.join(", "),
+      timestamp: Date.now(),
+    });
+    set({ stagedFileIds: Array.from(staged), timeline });
+    return removed;
+  },
   clearStage: () => {
     set({ stagedFileIds: [] });
+  },
+  renameEntry: (id, rawName) => {
+    const nextName = rawName.trim();
+    if (!nextName) return false;
+    const state = get();
+    const entry = state.entries[id];
+    if (!entry || entry.parentId == null) return false;
+    const parent = state.entries[entry.parentId];
+    if (!parent || parent.type !== "directory") return false;
+    const entries: Record<string, Entry> = { ...state.entries };
+    if (entry.type === "file") {
+      entries[id] = { ...entry, name: nextName };
+    } else {
+      entries[id] = { ...entry, name: nextName, children: [...entry.children] };
+    }
+    const updatedEntries = recomputePaths(entries, id);
+    const timeline = appendEvent(state.timeline, {
+      id: createId(),
+      kind: "command",
+      label: `Renamed ${entry.name} -> ${nextName}`,
+      detail: updatedEntries[id]?.path,
+      timestamp: Date.now(),
+    });
+    set({ entries: updatedEntries, timeline });
+    return true;
   },
   hardReset: (target) => {
     const state = get();
