@@ -164,6 +164,8 @@ function useCommandProcessor() {
   const getCommitLog = usePlaygroundStore((state) => state.getCommitLog);
   const hardReset = usePlaygroundStore((state) => state.hardReset);
   const clearStage = usePlaygroundStore((state) => state.clearStage);
+  const renameBranch = usePlaygroundStore((state) => state.renameBranch);
+  const deleteBranch = usePlaygroundStore((state) => state.deleteBranch);
 
   return useCallback(
     (input: string) => {
@@ -236,6 +238,8 @@ function useCommandProcessor() {
             commitChanges,
             checkoutBranch,
             createBranch,
+            renameBranch,
+            deleteBranch,
             checkoutCommit,
             getEntryByPath,
             headLabel,
@@ -255,9 +259,11 @@ function useCommandProcessor() {
       clearStage,
       commitChanges,
       createBranch,
+      deleteBranch,
       createEntry,
       getCommitLog,
       getEntryByPath,
+      renameBranch,
       hardReset,
       headLabel,
       listBranches,
@@ -277,6 +283,8 @@ function runGitCommand({
   commitChanges,
   checkoutBranch,
   createBranch,
+  renameBranch,
+  deleteBranch,
   checkoutCommit,
   getEntryByPath,
   headLabel,
@@ -292,6 +300,8 @@ function runGitCommand({
   commitChanges: (message: string) => { success: boolean; output: string[] };
   checkoutBranch: (branch: string) => { success: boolean; output: string[] };
   createBranch: (branch: string) => { success: boolean; output: string[] };
+  renameBranch: (oldName: string, newName: string, force?: boolean) => GitCommandResult;
+  deleteBranch: (branch: string, force?: boolean) => GitCommandResult;
   checkoutCommit: (commitId: string) => { success: boolean; output: string[] };
   getEntryByPath: (path: string) => Entry | null;
   headLabel: () => string;
@@ -380,7 +390,47 @@ function runGitCommand({
           return `${marker} ${branch.name}${suffix}`;
         });
       }
-      const name = tokens[0];
+      const flag = tokens[0];
+      if (flag === "-m" || flag === "-M") {
+        const force = flag === "-M";
+        let oldName: string | undefined;
+        let newName: string | undefined;
+        if (tokens.length === 2) {
+          oldName = usePlaygroundStore.getState().currentBranch;
+          newName = tokens[1];
+        } else if (tokens.length >= 3) {
+          oldName = tokens[1];
+          newName = tokens[2];
+        }
+        if (!oldName || !newName) {
+          return ["usage: git branch -m [old] <new>"];
+        }
+        const result = renameBranch(oldName, newName, force);
+        if (result.success) {
+          logEvent({
+            kind: "git",
+            label: `git branch ${force ? "-M" : "-m"}`,
+            detail: `${oldName} -> ${newName}`,
+          });
+        }
+        return result.output;
+      }
+      if (flag === "-d" || flag === "-D") {
+        const target = tokens[1];
+        if (!target) {
+          return ["usage: git branch -d <branch>"];
+        }
+        const result = deleteBranch(target, flag === "-D");
+        if (result.success) {
+          logEvent({
+            kind: "git",
+            label: `git branch ${flag}`,
+            detail: target,
+          });
+        }
+        return result.output;
+      }
+      const name = flag;
       const result = createBranch(name);
       if (result.success) {
         logEvent({ kind: "git", label: `git branch ${name}` });

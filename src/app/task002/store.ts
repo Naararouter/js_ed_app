@@ -92,6 +92,8 @@ interface PlaygroundState {
   commitChanges: (message: string) => GitCommandResult;
   checkoutBranch: (branch: string) => GitCommandResult;
   createBranch: (branch: string) => GitCommandResult;
+  renameBranch: (oldName: string, newName: string, force?: boolean) => GitCommandResult;
+  deleteBranch: (branch: string, force?: boolean) => GitCommandResult;
   checkoutCommit: (commitId: string) => GitCommandResult;
   headLabel: () => string;
   listBranches: () => { name: string; commitId: string | null; isCurrent: boolean }[];
@@ -748,6 +750,79 @@ export const usePlaygroundStore = create<PlaygroundState>((set, get) => ({
       success: true,
       output: [`Branch '${branch}' created pointing to ${state.headCommitId}`],
     };
+  },
+  renameBranch: (oldName, newName, force = false) => {
+    const state = get();
+    const trimmedOld = oldName.trim();
+    const trimmedNew = newName.trim();
+    if (!trimmedOld || !trimmedNew) {
+      return { success: false, output: ["usage: git branch -m <old> <new>"] };
+    }
+    if (!Object.prototype.hasOwnProperty.call(state.branches, trimmedOld)) {
+      return { success: false, output: [`error: branch '${trimmedOld}' not found`] };
+    }
+    if (
+      trimmedOld !== trimmedNew &&
+      Object.prototype.hasOwnProperty.call(state.branches, trimmedNew) &&
+      !force
+    ) {
+      return {
+        success: false,
+        output: [
+          `fatal: A branch named '${trimmedNew}' already exists.`,
+          "Use -M to force rename.",
+        ],
+      };
+    }
+    const branches = { ...state.branches };
+    const commitId = branches[trimmedOld];
+    delete branches[trimmedOld];
+    branches[trimmedNew] = commitId ?? null;
+    const currentBranch =
+      state.currentBranch === trimmedOld ? trimmedNew : state.currentBranch;
+    const timeline = appendEvent(state.timeline, {
+      id: createId(),
+      kind: "git",
+      label: `Renamed branch ${trimmedOld} -> ${trimmedNew}`,
+      timestamp: Date.now(),
+    });
+    set({ branches, currentBranch, timeline });
+    return {
+      success: true,
+      output: [`Branch '${trimmedOld}' renamed to '${trimmedNew}'`],
+    };
+  },
+  deleteBranch: (branch, force = false) => {
+    const state = get();
+    if (!Object.prototype.hasOwnProperty.call(state.branches, branch)) {
+      return { success: false, output: [`error: branch '${branch}' not found`] };
+    }
+    if (!force && state.currentBranch === branch && !state.headDetached) {
+      return {
+        success: false,
+        output: ["error: Cannot delete the branch you are currently on."],
+      };
+    }
+    const branchHead = state.branches[branch];
+    if (!force && branchHead && state.headCommitId && branchHead !== state.headCommitId) {
+      return {
+        success: false,
+        output: [
+          `error: The branch '${branch}' is not fully merged.`,
+          "Use -D to force delete.",
+        ],
+      };
+    }
+    const branches = { ...state.branches };
+    delete branches[branch];
+    const timeline = appendEvent(state.timeline, {
+      id: createId(),
+      kind: "git",
+      label: `Deleted branch ${branch}${force ? " (force)" : ""}`,
+      timestamp: Date.now(),
+    });
+    set({ branches, timeline });
+    return { success: true, output: [`Deleted branch '${branch}'`] };
   },
   checkoutCommit: (commitId) => {
     const state = get();
