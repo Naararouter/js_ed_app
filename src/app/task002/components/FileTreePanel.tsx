@@ -257,6 +257,7 @@ function GitStatusPanel() {
   const stageEntryIds = usePlaygroundStore((state) => state.stageEntryIds);
   const unstageEntryIds = usePlaygroundStore((state) => state.unstageEntryIds);
   const stageAllDirty = usePlaygroundStore((state) => state.stageAllDirty);
+  const isRepoInitialized = usePlaygroundStore((state) => state.isRepoInitialized);
 
   const stagedFiles = useMemo(
     () =>
@@ -292,6 +293,18 @@ function GitStatusPanel() {
     });
     return { unstagedFiles: unstaged, untrackedFiles: untracked };
   }, [entries, stagedSet]);
+
+  if (!isRepoInitialized) {
+    return (
+      <div className="mt-2 rounded-2xl border bg-muted/30 p-4 text-sm text-muted-foreground">
+        <p className="font-medium text-foreground">Repository not initialized</p>
+        <p className="mt-1">
+          Use <code>git init</code> in the terminal to enable Git tracking. Once initialized,
+          this panel will mirror <code>git status</code>.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-full flex-col gap-3">

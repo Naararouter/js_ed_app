@@ -11,6 +11,7 @@ import { cn } from "@/lib/utils";
 import { EditorPanel } from "./components/EditorPanel";
 import { FileTreePanel } from "./components/FileTreePanel";
 import { GraphPanel } from "./components/GraphPanel";
+import { ScenarioPanel } from "./components/ScenarioPanel";
 import { TaskSidebar } from "./components/TaskSidebar";
 import { TerminalPanel } from "./components/TerminalPanel";
 import { TimelinePanel } from "./components/TimelinePanel";
@@ -78,6 +79,7 @@ export default function Task002Page() {
       <section className={cn("grid flex-1 gap-4", layoutClass)}>
         {showLeft && (
           <div className="flex flex-col gap-4">
+            <ScenarioPanel />
             <TaskSidebar />
             <TimelinePanel />
           </div>

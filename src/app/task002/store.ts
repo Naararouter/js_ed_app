@@ -66,6 +66,38 @@ export interface GitCommandResult {
   output: string[];
 }
 
+interface ScenarioStateShape {
+  entries: Record<string, Entry>;
+  rootId: string;
+  activeFileId: string | null;
+  timeline: TimelineEvent[];
+  tasks: Task[];
+  hints: Hint[];
+  activeHintId: string | null;
+  commits: CommitNode[];
+  commitSnapshots: Record<string, Record<string, string>>;
+  branches: Record<string, string | null>;
+  currentBranch: string;
+  headCommitId: string | null;
+  headDetached: boolean;
+  stagedFileIds: string[];
+  isRepoInitialized: boolean;
+}
+
+interface ScenarioMeta {
+  id: string;
+  title: string;
+  summary: string;
+  difficulty: "Beginner" | "Intermediate" | "Advanced";
+}
+
+interface ScenarioDefinition extends ScenarioMeta {
+  build: () => ScenarioStateShape;
+}
+
+export const NOT_A_REPO_MESSAGE =
+  "fatal: not a git repository (or any of the parent directories): .git";
+
 interface PlaygroundState {
   entries: Record<string, Entry>;
   rootId: string;
@@ -81,6 +113,9 @@ interface PlaygroundState {
   headCommitId: string | null;
   headDetached: boolean;
   stagedFileIds: string[];
+  isRepoInitialized: boolean;
+  scenarioId: string;
+  scenarioCatalog: ScenarioMeta[];
   selectFile: (id: string) => void;
   updateFileContent: (id: string, content: string) => void;
   createEntry: (parentId: string, name: string, type: EntryType) => void;
@@ -94,6 +129,8 @@ interface PlaygroundState {
   unstageEntryIds: (ids: string[]) => string[];
   clearStage: () => void;
   renameEntry: (id: string, name: string) => boolean;
+  loadScenario: (id: string) => void;
+  initializeRepo: () => GitCommandResult;
   commitChanges: (message: string) => GitCommandResult;
   checkoutBranch: (branch: string) => GitCommandResult;
   createBranch: (branch: string) => GitCommandResult;
@@ -106,130 +143,8 @@ interface PlaygroundState {
   hardReset: (target?: string) => GitCommandResult;
 }
 
-const ROOT_ID = "repo";
-
-const initialEntries: Record<string, Entry> = {
-  [ROOT_ID]: {
-    id: ROOT_ID,
-    name: "git-playground",
-    type: "directory",
-    path: "/",
-    parentId: null,
-    children: ["readme", "src", "notes"],
-  },
-  readme: {
-    id: "readme",
-    name: "README.md",
-    type: "file",
-    parentId: ROOT_ID,
-    path: "/README.md",
-    content: "# Git Practice Playground\n\nStart by exploring tasks in the left panel.",
-    initialContent: "# Git Practice Playground\n\nStart by exploring tasks in the left panel.",
-    baselinePath: "/README.md",
-    isDirty: false,
-    language: "markdown",
-    tracked: true,
-  },
-  src: {
-    id: "src",
-    name: "src",
-    type: "directory",
-    parentId: ROOT_ID,
-    path: "/src",
-    children: ["main"],
-  },
-  main: {
-    id: "main",
-    name: "main.ts",
-    type: "file",
-    parentId: "src",
-    path: "/src/main.ts",
-    content: `export function greet(name: string) {
-  return \`Hello, \${name}! Welcome to the Git lab.\`;
-}`,
-    initialContent: `export function greet(name: string) {
-  return \`Hello, \${name}! Welcome to the Git lab.\`;
-}`,
-    baselinePath: "/src/main.ts",
-    isDirty: false,
-    language: "typescript",
-    tracked: true,
-  },
-  notes: {
-    id: "notes",
-    name: "notes",
-    type: "directory",
-    parentId: ROOT_ID,
-    path: "/notes",
-    children: ["journal"],
-  },
-  journal: {
-    id: "journal",
-    name: "journal.md",
-    type: "file",
-    parentId: "notes",
-    path: "/notes/journal.md",
-    content: "- [ ] Record what you learned today.\n",
-    initialContent: "- [ ] Record what you learned today.\n",
-    baselinePath: "/notes/journal.md",
-    isDirty: false,
-    language: "markdown",
-    tracked: true,
-  },
-};
-
-const initialTasks: Task[] = [
-  {
-    id: "task-1",
-    title: "Explore the repo",
-    detail: "Read README.md and inspect src/main.ts.",
-    done: false,
-  },
-  {
-    id: "task-2",
-    title: "Practice file edits",
-    detail: "Modify journal.md and note the timeline update.",
-    done: false,
-  },
-  {
-    id: "task-3",
-    title: "Review git graph",
-    detail: "Select a commit in the graph to see metadata.",
-    done: false,
-  },
-];
-
-const initialHints: Hint[] = [
-  {
-    id: "hint-1",
-    title: "Getting started",
-    body: "Use the terminal to run `ls` and see folders. Type `help` to view available commands.",
-  },
-  {
-    id: "hint-2",
-    title: "Editing files",
-    body: "Select a file in the tree, edit in Monaco, and the dirty badge will reflect unsaved changes vs. baseline.",
-  },
-  {
-    id: "hint-3",
-    title: "Graph insight",
-    body: "Click commits in the graph to sync the details panel and timeline.",
-  },
-];
-
-const initialCommitId = "c1";
-
-const initialCommits: CommitNode[] = [
-  {
-    id: initialCommitId,
-    message: "feat: bootstrap playground",
-    parents: [],
-    author: "mentor",
-    timestamp: Date.now() - 1000 * 60 * 60 * 24,
-  },
-];
-
-const initialSnapshot = snapshotEntries(initialEntries);
+const MENTOR_SCENARIO_ID = "mentor-repo";
+const GIT_INIT_SCENARIO_ID = "git-init";
 
 const createId = () => Math.random().toString(36).slice(2, 10);
 
@@ -360,29 +275,291 @@ function cleanupDanglingChildren(entries: Record<string, Entry>, entryId: string
   nextChildren.forEach((childId) => cleanupDanglingChildren(entries, childId));
 }
 
-export const usePlaygroundStore = create<PlaygroundState>((set, get) => ({
-  entries: initialEntries,
-  rootId: ROOT_ID,
-  activeFileId: "readme",
-  timeline: [
-    {
-      id: createId(),
-      kind: "command",
-      label: "Workspace initialized",
-      detail: "Loaded starter repository snapshot.",
-      timestamp: Date.now(),
+function buildMentorScenario(): ScenarioStateShape {
+  const rootId = "repo";
+  const entries: Record<string, Entry> = {
+    [rootId]: {
+      id: rootId,
+      name: "git-playground",
+      type: "directory",
+      parentId: null,
+      path: "/",
+      children: ["readme", "src", "notes"],
+      hidden: false,
     },
-  ],
-  tasks: initialTasks,
-  hints: initialHints,
-  activeHintId: initialHints[0]?.id ?? null,
-  commits: initialCommits,
-  commitSnapshots: { [initialCommitId]: initialSnapshot },
-  branches: { main: initialCommitId },
-  currentBranch: "main",
-  headCommitId: initialCommitId,
-  headDetached: false,
-  stagedFileIds: [],
+    readme: {
+      id: "readme",
+      name: "README.md",
+      type: "file",
+      parentId: rootId,
+      path: "/README.md",
+      content: "# Git Practice Playground\n\nStart by exploring tasks in the left panel.",
+      initialContent: "# Git Practice Playground\n\nStart by exploring tasks in the left panel.",
+      baselinePath: "/README.md",
+      isDirty: false,
+      language: "markdown",
+      tracked: true,
+      hidden: false,
+    },
+    src: {
+      id: "src",
+      name: "src",
+      type: "directory",
+      parentId: rootId,
+      path: "/src",
+      children: ["main"],
+      hidden: false,
+    },
+    main: {
+      id: "main",
+      name: "main.ts",
+      type: "file",
+      parentId: "src",
+      path: "/src/main.ts",
+      content: `export function greet(name: string) {
+  return \`Hello, \${name}! Welcome to the Git lab.\`;
+}`,
+      initialContent: `export function greet(name: string) {
+  return \`Hello, \${name}! Welcome to the Git lab.\`;
+}`,
+      baselinePath: "/src/main.ts",
+      isDirty: false,
+      language: "typescript",
+      tracked: true,
+      hidden: false,
+    },
+    notes: {
+      id: "notes",
+      name: "notes",
+      type: "directory",
+      parentId: rootId,
+      path: "/notes",
+      children: ["journal"],
+      hidden: false,
+    },
+    journal: {
+      id: "journal",
+      name: "journal.md",
+      type: "file",
+      parentId: "notes",
+      path: "/notes/journal.md",
+      content: "- [ ] Record what you learned today.\n",
+      initialContent: "- [ ] Record what you learned today.\n",
+      baselinePath: "/notes/journal.md",
+      isDirty: false,
+      language: "markdown",
+      tracked: true,
+      hidden: false,
+    },
+  };
+
+  const tasks: Task[] = [
+    {
+      id: "task-1",
+      title: "Explore the repo",
+      detail: "Read README.md and inspect src/main.ts.",
+      done: false,
+    },
+    {
+      id: "task-2",
+      title: "Practice file edits",
+      detail: "Modify journal.md and note the timeline update.",
+      done: false,
+    },
+    {
+      id: "task-3",
+      title: "Review git graph",
+      detail: "Select a commit in the graph to see metadata.",
+      done: false,
+    },
+  ];
+
+  const hints: Hint[] = [
+    {
+      id: "hint-1",
+      title: "Getting started",
+      body: "Use the terminal to run `ls` and see folders. Type `help` to view available commands.",
+    },
+    {
+      id: "hint-2",
+      title: "Editing files",
+      body: "Select a file in the tree, edit in Monaco, and the dirty badge will reflect unsaved changes vs. baseline.",
+    },
+    {
+      id: "hint-3",
+      title: "Graph insight",
+      body: "Click commits in the graph to sync the details panel and timeline.",
+    },
+  ];
+
+  const commitId = "c1";
+  const commits: CommitNode[] = [
+    {
+      id: commitId,
+      message: "feat: bootstrap playground",
+      parents: [],
+      author: "mentor",
+      timestamp: Date.now() - 1000 * 60 * 60 * 24,
+    },
+  ];
+  const commitSnapshots = { [commitId]: snapshotEntries(entries) };
+
+  return {
+    entries,
+    rootId,
+    activeFileId: "readme",
+    timeline: [
+      {
+        id: createId(),
+        kind: "command",
+        label: "Workspace initialized",
+        detail: "Loaded starter repository snapshot.",
+        timestamp: Date.now(),
+      },
+    ],
+    tasks,
+    hints,
+    activeHintId: hints[0]?.id ?? null,
+    commits,
+    commitSnapshots,
+    branches: { main: commitId },
+    currentBranch: "main",
+    headCommitId: commitId,
+    headDetached: false,
+    stagedFileIds: [],
+    isRepoInitialized: true,
+  };
+}
+
+function buildGitInitScenario(): ScenarioStateShape {
+  const rootId = "clean-root";
+  const guideId = "guide";
+  const entries: Record<string, Entry> = {
+    [rootId]: {
+      id: rootId,
+      name: "workspace",
+      type: "directory",
+      parentId: null,
+      path: "/",
+      children: [guideId],
+      hidden: false,
+    },
+    [guideId]: {
+      id: guideId,
+      name: "NOTES.md",
+      type: "file",
+      parentId: rootId,
+      path: "/NOTES.md",
+      content:
+        "# Fresh repo challenge\n\n1. Run `git init`\n2. Create a README and stage it\n3. Make your first commit.\n",
+      initialContent:
+        "# Fresh repo challenge\n\n1. Run `git init`\n2. Create a README and stage it\n3. Make your first commit.\n",
+      baselinePath: "/NOTES.md",
+      tracked: false,
+      isDirty: false,
+      hidden: false,
+    },
+  };
+
+  const tasks: Task[] = [
+    {
+      id: "init-1",
+      title: "Initialize repository",
+      detail: "Run `git init` inside the terminal.",
+      done: false,
+    },
+    {
+      id: "init-2",
+      title: "Stage your first file",
+      detail: "Create README.md and add it to the index.",
+      done: false,
+    },
+    {
+      id: "init-3",
+      title: "Make an initial commit",
+      detail: "Commit the staged README.md with a meaningful message.",
+      done: false,
+    },
+  ];
+
+  const hints: Hint[] = [
+    {
+      id: "init-hint-1",
+      title: "Start the repo",
+      body: "Inside the terminal run `git init` to create a new repository in this workspace.",
+    },
+    {
+      id: "init-hint-2",
+      title: "Add files",
+      body: "Use `touch README.md` and `git add README.md` after initializing.",
+    },
+    {
+      id: "init-hint-3",
+      title: "First commit",
+      body: "Once staged, run `git commit -m \"feat: initial commit\"`.",
+    },
+  ];
+
+  return {
+    entries,
+    rootId,
+    activeFileId: guideId,
+    timeline: [
+      {
+        id: createId(),
+        kind: "command",
+        label: "Fresh workspace ready",
+        detail: "Use git init to start the repository.",
+        timestamp: Date.now(),
+      },
+    ],
+    tasks,
+    hints,
+    activeHintId: hints[0]?.id ?? null,
+    commits: [],
+    commitSnapshots: {},
+    branches: {},
+    currentBranch: "main",
+    headCommitId: null,
+    headDetached: false,
+    stagedFileIds: [],
+    isRepoInitialized: false,
+  };
+}
+
+const SCENARIOS: ScenarioDefinition[] = [
+  {
+    id: MENTOR_SCENARIO_ID,
+    title: "Mentor Repository",
+    summary: "Prepopulated repo with commits, branches, and tasks to explore.",
+    difficulty: "Intermediate",
+    build: buildMentorScenario,
+  },
+  {
+    id: GIT_INIT_SCENARIO_ID,
+    title: "Fresh Git Init",
+    summary: "Start from scratch and practice initializing a repository.",
+    difficulty: "Beginner",
+    build: buildGitInitScenario,
+  },
+];
+
+const SCENARIO_CATALOG: ScenarioMeta[] = SCENARIOS.map(
+  ({ id, title, summary, difficulty }) => ({
+    id,
+    title,
+    summary,
+    difficulty,
+  })
+);
+
+const DEFAULT_SCENARIO = SCENARIOS[0];
+const DEFAULT_STATE = DEFAULT_SCENARIO.build();
+
+export const usePlaygroundStore = create<PlaygroundState>((set, get) => ({
+  ...DEFAULT_STATE,
+  scenarioId: DEFAULT_SCENARIO.id,
+  scenarioCatalog: SCENARIO_CATALOG,
   selectFile: (id) => {
     const entry = get().entries[id];
     if (!entry || entry.type !== "file" || entry.hidden) return;
@@ -658,8 +835,55 @@ export const usePlaygroundStore = create<PlaygroundState>((set, get) => ({
     set({ entries: updatedEntries, timeline });
     return true;
   },
+  loadScenario: (scenarioId) => {
+    const definition = SCENARIOS.find((scenario) => scenario.id === scenarioId);
+    if (!definition) return;
+    const nextState = definition.build();
+    set({
+      ...nextState,
+      scenarioId,
+      scenarioCatalog: SCENARIO_CATALOG,
+    });
+  },
+  initializeRepo: () => {
+    const state = get();
+    if (state.isRepoInitialized) {
+      return {
+        success: false,
+        output: ["Reinitialized existing Git repository."],
+      };
+    }
+    const branches = { main: null };
+    const timeline = appendEvent(state.timeline, {
+      id: createId(),
+      kind: "git",
+      label: "git init",
+      detail: "Initialized empty repository.",
+      timestamp: Date.now(),
+    });
+    set({
+      isRepoInitialized: true,
+      branches,
+      currentBranch: "main",
+      headCommitId: null,
+      headDetached: false,
+      commits: [],
+      commitSnapshots: {},
+      timeline,
+    });
+    return {
+      success: true,
+      output: [
+        "Initialized empty Git repository in /home/git-playground/.git/",
+        "You can start staging files immediately.",
+      ],
+    };
+  },
   hardReset: (target) => {
     const state = get();
+    if (!state.isRepoInitialized) {
+      return { success: false, output: [NOT_A_REPO_MESSAGE] };
+    }
     const resolved = resolveRef(state, target);
     if (!resolved) {
       return {
@@ -708,6 +932,9 @@ export const usePlaygroundStore = create<PlaygroundState>((set, get) => ({
   },
   listBranches: () => {
     const state = get();
+    if (!state.isRepoInitialized) {
+      return [];
+    }
     return Object.keys(state.branches)
       .sort()
       .map((name) => ({
@@ -718,6 +945,9 @@ export const usePlaygroundStore = create<PlaygroundState>((set, get) => ({
   },
   getCommitLog: (limit = 10) => {
     const state = get();
+    if (!state.isRepoInitialized) {
+      return [];
+    }
     const commitMap = new Map(state.commits.map((commit) => [commit.id, commit]));
     const log: CommitNode[] = [];
     let current = state.headCommitId;
@@ -734,6 +964,9 @@ export const usePlaygroundStore = create<PlaygroundState>((set, get) => ({
   },
   commitChanges: (message) => {
     const state = get();
+    if (!state.isRepoInitialized) {
+      return { success: false, output: [NOT_A_REPO_MESSAGE] };
+    }
     if (state.headDetached) {
       return {
         success: false,
@@ -840,6 +1073,9 @@ export const usePlaygroundStore = create<PlaygroundState>((set, get) => ({
   },
   checkoutBranch: (branch) => {
     const state = get();
+    if (!state.isRepoInitialized) {
+      return { success: false, output: [NOT_A_REPO_MESSAGE] };
+    }
     const target = state.branches[branch];
     if (!target) {
       return {
@@ -882,6 +1118,9 @@ export const usePlaygroundStore = create<PlaygroundState>((set, get) => ({
   },
   createBranch: (branch) => {
     const state = get();
+    if (!state.isRepoInitialized) {
+      return { success: false, output: [NOT_A_REPO_MESSAGE] };
+    }
     if (state.branches[branch]) {
       return {
         success: false,
@@ -910,6 +1149,9 @@ export const usePlaygroundStore = create<PlaygroundState>((set, get) => ({
   },
   renameBranch: (oldName, newName, force = false) => {
     const state = get();
+    if (!state.isRepoInitialized) {
+      return { success: false, output: [NOT_A_REPO_MESSAGE] };
+    }
     const trimmedOld = oldName.trim();
     const trimmedNew = newName.trim();
     if (!trimmedOld || !trimmedNew) {
@@ -951,6 +1193,9 @@ export const usePlaygroundStore = create<PlaygroundState>((set, get) => ({
   },
   deleteBranch: (branch, force = false) => {
     const state = get();
+    if (!state.isRepoInitialized) {
+      return { success: false, output: [NOT_A_REPO_MESSAGE] };
+    }
     if (!Object.prototype.hasOwnProperty.call(state.branches, branch)) {
       return { success: false, output: [`error: branch '${branch}' not found`] };
     }
@@ -983,6 +1228,9 @@ export const usePlaygroundStore = create<PlaygroundState>((set, get) => ({
   },
   checkoutCommit: (commitId) => {
     const state = get();
+    if (!state.isRepoInitialized) {
+      return { success: false, output: [NOT_A_REPO_MESSAGE] };
+    }
     const snapshot = state.commitSnapshots[commitId];
     if (!snapshot) {
       return {
@@ -1017,6 +1265,9 @@ export const usePlaygroundStore = create<PlaygroundState>((set, get) => ({
   },
   headLabel: () => {
     const state = get();
+    if (!state.isRepoInitialized) {
+      return "Repository not initialized";
+    }
     if (state.headDetached) {
       return `HEAD (detached at ${state.headCommitId ?? "??"})`;
     }

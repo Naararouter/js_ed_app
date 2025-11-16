@@ -6,6 +6,7 @@ import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 
 import {
+  NOT_A_REPO_MESSAGE,
   usePlaygroundStore,
   type CommitNode,
   type Entry,
@@ -166,6 +167,8 @@ function useCommandProcessor() {
   const clearStage = usePlaygroundStore((state) => state.clearStage);
   const renameBranch = usePlaygroundStore((state) => state.renameBranch);
   const deleteBranch = usePlaygroundStore((state) => state.deleteBranch);
+  const isRepoInitialized = usePlaygroundStore((state) => state.isRepoInitialized);
+  const initializeRepo = usePlaygroundStore((state) => state.initializeRepo);
 
   return useCallback(
     (input: string) => {
@@ -248,6 +251,8 @@ function useCommandProcessor() {
             listBranches,
             getCommitLog,
             hardReset,
+            initializeRepo,
+            isRepoInitialized,
           });
         }
         default:
@@ -261,9 +266,11 @@ function useCommandProcessor() {
       commitChanges,
       createBranch,
       deleteBranch,
+      initializeRepo,
       createEntry,
       getCommitLog,
       getEntryByPath,
+      isRepoInitialized,
       renameBranch,
       hardReset,
       headLabel,
@@ -293,6 +300,8 @@ function runGitCommand({
   listBranches,
   getCommitLog,
   hardReset,
+  initializeRepo,
+  isRepoInitialized,
 }: {
   tokens: string[];
   stageEntryIds: (ids: string[]) => string[];
@@ -310,12 +319,21 @@ function runGitCommand({
   listBranches: () => { name: string; commitId: string | null; isCurrent: boolean }[];
   getCommitLog: (limit?: number) => CommitNode[];
   hardReset: (target?: string) => GitCommandResult;
+  initializeRepo: () => GitCommandResult;
+  isRepoInitialized: boolean;
 }): string[] {
   if (tokens.length === 0) {
     return ["usage: git <command>"];
   }
   const sub = tokens.shift()!;
+  if (sub !== "init" && !isRepoInitialized) {
+    return [NOT_A_REPO_MESSAGE];
+  }
   switch (sub) {
+    case "init": {
+      const result = initializeRepo();
+      return result.output;
+    }
     case "status":
       logEvent({ kind: "git", label: "git status" });
       return formatGitStatus(headLabel());
@@ -503,6 +521,9 @@ function checkoutTarget(
 
 function formatGitStatus(headLabel: string) {
   const state = usePlaygroundStore.getState();
+  if (!state.isRepoInitialized) {
+    return [NOT_A_REPO_MESSAGE];
+  }
   const stagedSet = new Set(state.stagedFileIds);
   const staged: Array<{ path: string; type: "modified" | "deleted" }> = [];
   const modified: Array<{ path: string; type: "modified" | "deleted" }> = [];
