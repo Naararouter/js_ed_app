@@ -4,26 +4,27 @@ import { create } from "zustand";
 
 type EntryType = "file" | "directory";
 
-export interface DirectoryEntry {
+interface BaseEntry {
   id: string;
   name: string;
-  type: "directory";
   parentId: string | null;
   path: string;
+}
+
+export interface DirectoryEntry extends BaseEntry {
+  type: "directory";
   children: string[];
 }
 
-export interface FileEntry {
-  id: string;
-  name: string;
+export interface FileEntry extends BaseEntry {
   type: "file";
-  parentId: string | null;
-  path: string;
   content: string;
   initialContent: string;
   language?: string;
   isDirty: boolean;
   lastEdited?: number;
+  tracked: boolean;
+  hidden?: boolean;
 }
 
 export type Entry = DirectoryEntry | FileEntry;
@@ -52,10 +53,14 @@ export interface TimelineEvent {
 export interface CommitNode {
   id: string;
   message: string;
-  branch: string;
   parents: string[];
   author: string;
   timestamp: number;
+}
+
+export interface GitCommandResult {
+  success: boolean;
+  output: string[];
 }
 
 interface PlaygroundState {
@@ -67,16 +72,28 @@ interface PlaygroundState {
   hints: Hint[];
   activeHintId: string | null;
   commits: CommitNode[];
-  activeCommitId: string | null;
+  commitSnapshots: Record<string, Record<string, string>>;
+  branches: Record<string, string | null>;
+  currentBranch: string;
+  headCommitId: string | null;
+  headDetached: boolean;
+  stagedFileIds: string[];
   selectFile: (id: string) => void;
   updateFileContent: (id: string, content: string) => void;
   createEntry: (parentId: string, name: string, type: EntryType) => void;
   deleteEntry: (id: string) => void;
   logEvent: (event: Omit<TimelineEvent, "id" | "timestamp"> & { timestamp?: number }) => void;
-  setActiveCommit: (id: string) => void;
   toggleTask: (id: string) => void;
   viewHint: (id: string) => void;
   getEntryByPath: (path: string) => Entry | null;
+  stageEntryIds: (ids: string[]) => string[];
+  stageAllDirty: () => string[];
+  clearStage: () => void;
+  commitChanges: (message: string) => GitCommandResult;
+  checkoutBranch: (branch: string) => GitCommandResult;
+  createBranch: (branch: string) => GitCommandResult;
+  checkoutCommit: (commitId: string) => GitCommandResult;
+  headLabel: () => string;
 }
 
 const ROOT_ID = "repo";
@@ -100,6 +117,7 @@ const initialEntries: Record<string, Entry> = {
     initialContent: "# Git Practice Playground\n\nStart by exploring tasks in the left panel.",
     isDirty: false,
     language: "markdown",
+    tracked: true,
   },
   src: {
     id: "src",
@@ -123,6 +141,7 @@ const initialEntries: Record<string, Entry> = {
 }`,
     isDirty: false,
     language: "typescript",
+    tracked: true,
   },
   notes: {
     id: "notes",
@@ -142,6 +161,7 @@ const initialEntries: Record<string, Entry> = {
     initialContent: "- [ ] Record what you learned today.\n",
     isDirty: false,
     language: "markdown",
+    tracked: true,
   },
 };
 
@@ -184,38 +204,25 @@ const initialHints: Hint[] = [
   },
 ];
 
+const initialCommitId = "c1";
+
 const initialCommits: CommitNode[] = [
   {
-    id: "c1",
+    id: initialCommitId,
     message: "feat: bootstrap playground",
-    branch: "main",
     parents: [],
     author: "mentor",
     timestamp: Date.now() - 1000 * 60 * 60 * 24,
   },
-  {
-    id: "c2",
-    message: "feat: add terminal shell",
-    branch: "main",
-    parents: ["c1"],
-    author: "mentor",
-    timestamp: Date.now() - 1000 * 60 * 60 * 12,
-  },
-  {
-    id: "c3",
-    message: "feat: graph prototype",
-    branch: "feature/graph",
-    parents: ["c2"],
-    author: "mentor",
-    timestamp: Date.now() - 1000 * 60 * 30,
-  },
 ];
+
+const initialSnapshot = snapshotEntries(initialEntries);
 
 const createId = () => Math.random().toString(36).slice(2, 10);
 
 const appendEvent = (timeline: TimelineEvent[], event: TimelineEvent) => {
   const next = [...timeline, event];
-  if (next.length > 75) {
+  if (next.length > 100) {
     next.shift();
   }
   return next;
@@ -229,6 +236,54 @@ const sanitizePath = (raw: string) => {
   }
   return cleaned.replace(/\/+$/, "") || "/";
 };
+
+function snapshotEntries(entries: Record<string, Entry>) {
+  const snapshot: Record<string, string> = {};
+  Object.values(entries).forEach((entry) => {
+    if (entry.type === "file" && entry.tracked && !entry.hidden) {
+      snapshot[entry.path] = entry.content;
+    }
+  });
+  return snapshot;
+}
+
+function applySnapshotToEntries(
+  entries: Record<string, Entry>,
+  snapshot: Record<string, string>,
+  activeFileId: string | null
+) {
+  const nextEntries: Record<string, Entry> = { ...entries };
+  let nextActive = activeFileId;
+  Object.values(entries).forEach((entry) => {
+    if (entry.type !== "file" || !entry.tracked) return;
+    const value = snapshot[entry.path];
+    if (value != null) {
+      nextEntries[entry.id] = {
+        ...entry,
+        hidden: false,
+        content: value,
+        initialContent: value,
+        isDirty: false,
+      };
+    } else {
+      nextEntries[entry.id] = {
+        ...entry,
+        hidden: true,
+        content: "",
+        initialContent: "",
+        isDirty: false,
+      };
+      if (nextActive === entry.id) {
+        nextActive = null;
+      }
+    }
+  });
+  return { entries: nextEntries, activeFileId: nextActive };
+}
+
+function generateCommitId() {
+  return `c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+}
 
 export const usePlaygroundStore = create<PlaygroundState>((set, get) => ({
   entries: initialEntries,
@@ -247,10 +302,15 @@ export const usePlaygroundStore = create<PlaygroundState>((set, get) => ({
   hints: initialHints,
   activeHintId: initialHints[0]?.id ?? null,
   commits: initialCommits,
-  activeCommitId: initialCommits[initialCommits.length - 1]?.id ?? null,
+  commitSnapshots: { [initialCommitId]: initialSnapshot },
+  branches: { main: initialCommitId },
+  currentBranch: "main",
+  headCommitId: initialCommitId,
+  headDetached: false,
+  stagedFileIds: [],
   selectFile: (id) => {
     const entry = get().entries[id];
-    if (!entry || entry.type !== "file") return;
+    if (!entry || entry.type !== "file" || entry.hidden) return;
     set({ activeFileId: id });
     get().logEvent({
       kind: "command",
@@ -262,6 +322,7 @@ export const usePlaygroundStore = create<PlaygroundState>((set, get) => ({
     set((state) => {
       const entry = state.entries[id];
       if (!entry || entry.type !== "file") return state;
+      if (entry.hidden) return state;
       const updated: FileEntry = {
         ...entry,
         content,
@@ -279,69 +340,68 @@ export const usePlaygroundStore = create<PlaygroundState>((set, get) => ({
       return { entries, timeline };
     });
   },
-  createEntry: (parentId, name, type) => {
+  createEntry: (parentId, rawName, type) => {
     set((state) => {
       const parent = state.entries[parentId];
       if (!parent || parent.type !== "directory") return state;
-      if (!name.trim()) return state;
+      const name = rawName.trim();
+      if (!name) return state;
       const id = createId();
-      const path =
-        parent.path === "/" ? `/${name.trim()}` : `${parent.path}/${name.trim()}`;
-      const nextEntries = { ...state.entries };
+      const path = parent.path === "/" ? `/${name}` : `${parent.path}/${name}`;
+      const entries = { ...state.entries };
       if (type === "directory") {
-        nextEntries[id] = {
+        entries[id] = {
           id,
-          name: name.trim(),
+          name,
           type: "directory",
           parentId,
           path,
           children: [],
         };
       } else {
-        nextEntries[id] = {
+        entries[id] = {
           id,
-          name: name.trim(),
+          name,
           type: "file",
           parentId,
           path,
           content: "",
           initialContent: "",
           isDirty: true,
+          tracked: false,
+          hidden: false,
         };
       }
-      nextEntries[parentId] = {
-        ...parent,
-        children: [...parent.children, id],
-      };
+      entries[parentId] = { ...parent, children: [...parent.children, id] };
       const timeline = appendEvent(state.timeline, {
         id: createId(),
         kind: "command",
-        label: `${type === "file" ? "Created file" : "Created folder"} ${name.trim()}`,
+        label: `${type === "file" ? "Created file" : "Created folder"} ${name}`,
         detail: `Parent ${parent.path}`,
         timestamp: Date.now(),
       });
-      return { entries: nextEntries, timeline };
+      return { entries, timeline };
     });
   },
   deleteEntry: (id) => {
     set((state) => {
       const entry = state.entries[id];
       if (!entry || entry.parentId == null) return state;
-      const nextEntries = { ...state.entries };
+      const entries = { ...state.entries };
       const removeRecursive = (entryId: string) => {
-        const node = nextEntries[entryId];
+        const node = entries[entryId];
         if (!node) return;
         if (node.type === "directory") {
           node.children.forEach(removeRecursive);
         }
-        delete nextEntries[entryId];
+        delete entries[entryId];
       };
       removeRecursive(id);
       const parent = state.entries[entry.parentId];
       if (parent && parent.type === "directory") {
-        nextEntries[parent.id] = {
+        entries[parent.id] = {
           ...parent,
-          children: parent.children.filter((childId) => childId !== id),
+          children: parent.children.filter((child) => child !== id),
         };
       }
       const timeline = appendEvent(state.timeline, {
@@ -351,9 +411,8 @@ export const usePlaygroundStore = create<PlaygroundState>((set, get) => ({
         detail: `Path ${entry.path}`,
         timestamp: Date.now(),
       });
-      const activeFileId =
-        state.activeFileId === id ? null : state.activeFileId;
-      return { entries: nextEntries, timeline, activeFileId };
+      const activeFileId = state.activeFileId === id ? null : state.activeFileId;
+      return { entries, timeline, activeFileId };
     });
   },
   logEvent: (event) => {
@@ -364,19 +423,6 @@ export const usePlaygroundStore = create<PlaygroundState>((set, get) => ({
         ...event,
       });
       return { timeline };
-    });
-  },
-  setActiveCommit: (id) => {
-    set((state) => {
-      if (!state.commits.some((commit) => commit.id === id)) return state;
-      const timeline = appendEvent(state.timeline, {
-        id: createId(),
-        kind: "git",
-        label: `Selected commit ${id}`,
-        detail: state.commits.find((commit) => commit.id === id)?.message,
-        timestamp: Date.now(),
-      });
-      return { activeCommitId: id, timeline };
     });
   },
   toggleTask: (id) => {
@@ -408,11 +454,243 @@ export const usePlaygroundStore = create<PlaygroundState>((set, get) => ({
       if (!current || current.type !== "directory") return null;
       const childId = current.children
         .map((child) => state.entries[child])
-        .find((child) => child?.name === segment)?.id;
+        .find((child) => child && child.name === segment)?.id;
       if (!childId) return null;
-      current = state.entries[childId];
+      const child = state.entries[childId];
+      if (child?.type === "file" && child.hidden) {
+        return null;
+      }
+      current = child;
     }
     return current ?? null;
+  },
+  stageEntryIds: (ids) => {
+    const state = get();
+    const staged = new Set(state.stagedFileIds);
+    const stagedPaths: string[] = [];
+    ids.forEach((id) => {
+      const entry = state.entries[id];
+      if (!entry || entry.type !== "file") return;
+      if (entry.hidden) return;
+      if (!entry.isDirty && entry.tracked) return;
+      if (staged.has(id)) return;
+      staged.add(id);
+      stagedPaths.push(entry.path);
+    });
+    if (stagedPaths.length === 0) {
+      return [];
+    }
+    set({ stagedFileIds: Array.from(staged) });
+    get().logEvent({
+      kind: "git",
+      label: `Staged ${stagedPaths.length} file(s)`,
+      detail: stagedPaths.join(", "),
+    });
+    return stagedPaths;
+  },
+  stageAllDirty: () => {
+    const state = get();
+    const dirtyIds = Object.values(state.entries)
+      .filter((entry): entry is FileEntry => entry.type === "file" && !entry.hidden && (entry.isDirty || !entry.tracked))
+      .map((entry) => entry.id);
+    return state.stageEntryIds(dirtyIds);
+  },
+  clearStage: () => {
+    set({ stagedFileIds: [] });
+  },
+  commitChanges: (message) => {
+    const state = get();
+    if (state.headDetached) {
+      return {
+        success: false,
+        output: ["error: detached HEAD. Switch to a branch before committing."],
+      };
+    }
+    if (!message.trim()) {
+      return {
+        success: false,
+        output: ["error: please provide a commit message (use -m \"msg\")."],
+      };
+    }
+    if (state.stagedFileIds.length === 0) {
+      return {
+        success: false,
+        output: ["nothing to commit (use \"git add\" to stage files)"],
+      };
+    }
+    const parentId = state.headCommitId;
+    const baseSnapshot = parentId
+      ? { ...state.commitSnapshots[parentId] }
+      : {};
+    const entries = { ...state.entries };
+    const stagedSet = new Set(state.stagedFileIds);
+    Object.values(entries).forEach((entry) => {
+      if (entry.type !== "file" || !stagedSet.has(entry.id)) return;
+      baseSnapshot[entry.path] = entry.content;
+    });
+    const commitId = generateCommitId();
+    const commit: CommitNode = {
+      id: commitId,
+      message,
+      parents: parentId ? [parentId] : [],
+      author: "student",
+      timestamp: Date.now(),
+    };
+    stagedSet.forEach((id) => {
+      const entry = entries[id];
+      if (!entry || entry.type !== "file") return;
+      entries[id] = {
+        ...entry,
+        tracked: true,
+        hidden: false,
+        initialContent: entry.content,
+        isDirty: false,
+      };
+    });
+    const branches = {
+      ...state.branches,
+      [state.currentBranch]: commitId,
+    };
+    const commits = [...state.commits, commit];
+    const commitSnapshots = { ...state.commitSnapshots, [commitId]: baseSnapshot };
+    const timeline = appendEvent(state.timeline, {
+      id: createId(),
+      kind: "git",
+      label: `Commit ${commitId}`,
+      detail: message,
+      timestamp: Date.now(),
+    });
+    set({
+      entries,
+      commits,
+      commitSnapshots,
+      branches,
+      headCommitId: commitId,
+      activeFileId: state.activeFileId,
+      headDetached: false,
+      stagedFileIds: [],
+      timeline,
+    });
+    return {
+      success: true,
+      output: [
+        `[${state.currentBranch}] ${commitId}`,
+        ` ${message}`,
+        "",
+        `${stagedSet.size} file(s) committed.`,
+      ],
+    };
+  },
+  checkoutBranch: (branch) => {
+    const state = get();
+    const target = state.branches[branch];
+    if (!target) {
+      return {
+        success: false,
+        output: [`error: branch '${branch}' not found`],
+      };
+    }
+    const snapshot = state.commitSnapshots[target];
+    if (!snapshot) {
+      return {
+        success: false,
+        output: [`error: missing snapshot for ${target}`],
+      };
+    }
+    const { entries, activeFileId } = applySnapshotToEntries(
+      state.entries,
+      snapshot,
+      state.activeFileId
+    );
+    const timeline = appendEvent(state.timeline, {
+      id: createId(),
+      kind: "git",
+      label: `Checkout ${branch}`,
+      detail: `HEAD -> ${target}`,
+      timestamp: Date.now(),
+    });
+    set({
+      entries,
+      activeFileId,
+      headCommitId: target,
+      headDetached: false,
+      currentBranch: branch,
+      stagedFileIds: [],
+      timeline,
+    });
+    return {
+      success: true,
+      output: [`Switched to branch '${branch}'`],
+    };
+  },
+  createBranch: (branch) => {
+    const state = get();
+    if (state.branches[branch]) {
+      return {
+        success: false,
+        output: [`fatal: branch '${branch}' already exists`],
+      };
+    }
+    if (!state.headCommitId) {
+      return {
+        success: false,
+        output: ["error: no commits yet"],
+      };
+    }
+    const branches = { ...state.branches, [branch]: state.headCommitId };
+    const timeline = appendEvent(state.timeline, {
+      id: createId(),
+      kind: "git",
+      label: `Created branch ${branch}`,
+      detail: `HEAD @ ${state.headCommitId}`,
+      timestamp: Date.now(),
+    });
+    set({ branches, timeline });
+    return {
+      success: true,
+      output: [`Branch '${branch}' created pointing to ${state.headCommitId}`],
+    };
+  },
+  checkoutCommit: (commitId) => {
+    const state = get();
+    const snapshot = state.commitSnapshots[commitId];
+    if (!snapshot) {
+      return {
+        success: false,
+        output: [`error: commit '${commitId}' not found`],
+      };
+    }
+    const { entries, activeFileId } = applySnapshotToEntries(
+      state.entries,
+      snapshot,
+      state.activeFileId
+    );
+    const timeline = appendEvent(state.timeline, {
+      id: createId(),
+      kind: "git",
+      label: `Checkout commit ${commitId}`,
+      detail: "HEAD detached",
+      timestamp: Date.now(),
+    });
+    set({
+      entries,
+      activeFileId,
+      headCommitId: commitId,
+      headDetached: true,
+      stagedFileIds: [],
+      timeline,
+    });
+    return {
+      success: true,
+      output: [`Note: switching to '${commitId}'. HEAD is now detached.`],
+    };
+  },
+  headLabel: () => {
+    const state = get();
+    if (state.headDetached) {
+      return `HEAD (detached at ${state.headCommitId ?? "??"})`;
+    }
+    return `HEAD -> ${state.currentBranch}`;
   },
 }));
 

@@ -45,7 +45,9 @@ export function FileTreePanel() {
 
   const totalFiles = useMemo(
     () =>
-      Object.values(entries).filter((entry) => entry.type === "file").length,
+      Object.values(entries).filter(
+        (entry) => entry.type === "file" && !entry.hidden
+      ).length,
     [entries]
   );
 
@@ -93,11 +95,18 @@ function TreeNode({ entryId, depth = 0, expanded, onToggle }: TreeNodeProps) {
   const entry = usePlaygroundStore((state) => state.entries[entryId]);
   const activeFileId = usePlaygroundStore((state) => state.activeFileId);
   const selectFile = usePlaygroundStore((state) => state.selectFile);
+  const entries = usePlaygroundStore((state) => state.entries);
 
   if (!entry) return null;
 
   if (entry.type === "directory") {
     const isOpen = expanded[entry.id];
+    const visibleChildren = entry.children.filter((childId) => {
+      const child = entries[childId];
+      if (!child) return false;
+      if (child.type === "file" && child.hidden) return false;
+      return true;
+    });
     return (
       <div>
         <button
@@ -119,11 +128,11 @@ function TreeNode({ entryId, depth = 0, expanded, onToggle }: TreeNodeProps) {
           )}
           <span>{entry.name}</span>
           <span className="ml-auto text-xs text-muted-foreground">
-            {entry.children.length}
+            {visibleChildren.length}
           </span>
         </button>
         {isOpen &&
-          entry.children.map((childId) => (
+          visibleChildren.map((childId) => (
             <TreeNode
               key={childId}
               entryId={childId}
@@ -134,6 +143,10 @@ function TreeNode({ entryId, depth = 0, expanded, onToggle }: TreeNodeProps) {
           ))}
       </div>
     );
+  }
+
+  if (entry.hidden) {
+    return null;
   }
 
   const isActive = activeFileId === entry.id;

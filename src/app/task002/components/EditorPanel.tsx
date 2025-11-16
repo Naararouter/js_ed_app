@@ -24,7 +24,7 @@ export function EditorPanel() {
 
   if (!file || file.type !== "file") {
     return (
-      <section className="flex h-full flex-col items-center justify-center rounded-2xl border bg-muted/50 p-6 text-center text-sm text-muted-foreground shadow-inner">
+      <section className="flex min-h-[420px] flex-col items-center justify-center rounded-2xl border bg-muted/30 p-6 text-center text-sm text-muted-foreground shadow-inner">
         Select a file from the tree to start editing. Edits automatically sync to
         the timeline and future git status checks.
       </section>
@@ -32,7 +32,7 @@ export function EditorPanel() {
   }
 
   return (
-    <section className="flex h-full flex-col rounded-2xl border bg-card shadow-sm">
+    <section className="flex min-h-[420px] flex-col rounded-2xl border bg-white shadow-sm">
       <header className="flex items-center justify-between border-b px-4 py-3">
         <div>
           <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
@@ -57,7 +57,7 @@ export function EditorPanel() {
           language={language}
           value={file.content}
           onChange={(value) => updateFileContent(file.id, value ?? "")}
-          theme="vs-dark"
+          theme="vs-light"
           options={{
             minimap: { enabled: false },
             fontSize: 14,
@@ -70,4 +70,3 @@ export function EditorPanel() {
     </section>
   );
 }
-
