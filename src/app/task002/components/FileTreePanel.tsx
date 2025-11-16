@@ -180,7 +180,7 @@ function TreeNode({ entryId, depth = 0, expanded, onToggle }: TreeNodeProps) {
     const visibleChildren = entry.children.filter((childId) => {
       const child = entries[childId];
       if (!child) return false;
-      if (child.type === "file" && child.hidden) return false;
+      if (child.hidden) return false;
       return true;
     });
     return (
@@ -262,7 +262,7 @@ function GitStatusPanel() {
     () =>
       stagedFileIds
         .map((id) => entries[id])
-        .filter((entry): entry is FileEntry => Boolean(entry && entry.type === "file" && !entry.hidden)),
+        .filter((entry): entry is FileEntry => Boolean(entry && entry.type === "file")),
     [entries, stagedFileIds]
   );
 
@@ -272,11 +272,20 @@ function GitStatusPanel() {
     const unstaged: FileEntry[] = [];
     const untracked: FileEntry[] = [];
     Object.values(entries).forEach((entry) => {
-      if (!entry || entry.type !== "file" || entry.hidden) return;
+      if (!entry || entry.type !== "file") return;
       if (!entry.tracked) {
-        untracked.push(entry);
+        if (!entry.hidden) {
+          untracked.push(entry);
+        }
         return;
       }
+      if (entry.deleted) {
+        if (!stagedSet.has(entry.id)) {
+          unstaged.push(entry);
+        }
+        return;
+      }
+      if (entry.hidden) return;
       if (entry.isDirty && !stagedSet.has(entry.id)) {
         unstaged.push(entry);
       }
@@ -386,14 +395,23 @@ function StatusSection({
             className="flex items-center gap-3 rounded-lg bg-background px-3 py-2 text-xs shadow-sm"
           >
             <div className="flex-1 truncate font-mono text-[11px] text-muted-foreground">
-              {file.path}
+              {file.deleted ? file.baselinePath ?? file.path : file.path}
             </div>
+            {file.deleted && (
+              <span className="rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-semibold uppercase text-red-700">
+                deleted
+              </span>
+            )}
             <Button
               size="xs"
               variant="secondary"
               onClick={() => onItemAction(file.id)}
             >
-              {itemActionLabel}
+              {file.deleted && itemActionLabel === "Stage"
+                ? "Stage deletion"
+                : file.deleted && itemActionLabel === "Unstage"
+                ? "Unstage deletion"
+                : itemActionLabel}
             </Button>
           </div>
         ))}

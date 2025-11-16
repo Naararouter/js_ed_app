@@ -181,7 +181,8 @@ function useCommandProcessor() {
         case "ls": {
           const target = tokens[0] ?? "/";
           const entry = getEntryByPath(target);
-          if (!entry) return [`ls: cannot access '${target}': No such entry`];
+          if (!entry || entry.hidden)
+            return [`ls: cannot access '${target}': No such entry`];
           if (entry.type === "file") {
             return [entry.name];
           }
@@ -189,7 +190,7 @@ function useCommandProcessor() {
             .map((childId) => usePlaygroundStore.getState().entries[childId])
             .filter(
               (child): child is Entry =>
-                Boolean(child && (child.type === "directory" || !child.hidden))
+                Boolean(child && !child.hidden)
             )
             .map((child) =>
               child!.type === "directory" ? `${child!.name}/` : child!.name
@@ -201,7 +202,7 @@ function useCommandProcessor() {
           const target = tokens[0];
           if (!target) return ["Usage: open <path>"];
           const entry = getEntryByPath(target);
-          if (!entry || entry.type !== "file") {
+          if (!entry || entry.type !== "file" || entry.hidden) {
             return [`open: ${target} is not a file`];
           }
           selectFile(entry.id);
@@ -212,7 +213,7 @@ function useCommandProcessor() {
           const target = tokens[0];
           if (!target) return ["Usage: cat <path>"];
           const entry = getEntryByPath(target);
-          if (!entry || entry.type !== "file")
+          if (!entry || entry.type !== "file" || entry.hidden)
             return [`cat: ${target}: not a file`];
           logEvent({ kind: "command", label: `Cat ${entry.path}` });
           return entry.content.split("\n");
@@ -503,34 +504,48 @@ function checkoutTarget(
 function formatGitStatus(headLabel: string) {
   const state = usePlaygroundStore.getState();
   const stagedSet = new Set(state.stagedFileIds);
-  const staged: string[] = [];
-  const modified: string[] = [];
+  const staged: Array<{ path: string; type: "modified" | "deleted" }> = [];
+  const modified: Array<{ path: string; type: "modified" | "deleted" }> = [];
   const untracked: string[] = [];
   Object.values(state.entries).forEach((entry) => {
-    if (entry.type !== "file" || entry.hidden) return;
+    if (entry.type !== "file") return;
+    const displayPath = entry.deleted ? entry.baselinePath ?? entry.path : entry.path;
+    if (entry.hidden && !entry.deleted) return;
     if (stagedSet.has(entry.id)) {
-      staged.push(entry.path);
+      staged.push({ path: displayPath, type: entry.deleted ? "deleted" : "modified" });
       return;
     }
     if (!entry.tracked) {
-      if (entry.isDirty) {
+      if (!entry.hidden && entry.isDirty) {
         untracked.push(entry.path);
       }
       return;
     }
+    if (entry.deleted) {
+      modified.push({ path: displayPath, type: "deleted" });
+      return;
+    }
     if (entry.isDirty) {
-      modified.push(entry.path);
+      modified.push({ path: entry.path, type: "modified" });
     }
   });
   const lines = [headLabel, ""];
   if (staged.length) {
     lines.push("Changes to be committed:", "  (use \"git reset HEAD <file>...\" to unstage)");
-    staged.forEach((path) => lines.push(`        modified:   ${path}`));
+    staged.forEach((item) =>
+      lines.push(
+        `        ${item.type === "deleted" ? "deleted:   " : "modified:  "}${item.path}`
+      )
+    );
     lines.push("");
   }
   if (modified.length) {
     lines.push("Changes not staged for commit:", "  (use \"git add <file>...\" to update what will be committed)");
-    modified.forEach((path) => lines.push(`        modified:   ${path}`));
+    modified.forEach((item) =>
+      lines.push(
+        `        ${item.type === "deleted" ? "deleted:   " : "modified:  "}${item.path}`
+      )
+    );
     lines.push("");
   }
   if (untracked.length) {
@@ -555,13 +570,15 @@ function formatLogDate(timestamp: number) {
 
 function collectVisibleFileIds(entry: Entry, entries: Record<string, Entry>) {
   if (entry.type === "file") {
-    return entry.hidden ? [] : [entry.id];
+    if (entry.hidden && !entry.deleted) return [];
+    return [entry.id];
   }
   return entry.children.flatMap((childId) => {
     const child = entries[childId];
     if (!child) return [];
     if (child.type === "file") {
-      return child.hidden ? [] : [child.id];
+      if (child.hidden && !child.deleted) return [];
+      return [child.id];
     }
     return collectVisibleFileIds(child, entries);
   });

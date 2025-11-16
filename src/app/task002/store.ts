@@ -14,17 +14,20 @@ interface BaseEntry {
 export interface DirectoryEntry extends BaseEntry {
   type: "directory";
   children: string[];
+  hidden?: boolean;
 }
 
 export interface FileEntry extends BaseEntry {
   type: "file";
   content: string;
   initialContent: string;
+  baselinePath: string;
   language?: string;
   isDirty: boolean;
   lastEdited?: number;
   tracked: boolean;
   hidden?: boolean;
+  deleted?: boolean;
 }
 
 export type Entry = DirectoryEntry | FileEntry;
@@ -122,6 +125,7 @@ const initialEntries: Record<string, Entry> = {
     path: "/README.md",
     content: "# Git Practice Playground\n\nStart by exploring tasks in the left panel.",
     initialContent: "# Git Practice Playground\n\nStart by exploring tasks in the left panel.",
+    baselinePath: "/README.md",
     isDirty: false,
     language: "markdown",
     tracked: true,
@@ -146,6 +150,7 @@ const initialEntries: Record<string, Entry> = {
     initialContent: `export function greet(name: string) {
   return \`Hello, \${name}! Welcome to the Git lab.\`;
 }`,
+    baselinePath: "/src/main.ts",
     isDirty: false,
     language: "typescript",
     tracked: true,
@@ -166,6 +171,7 @@ const initialEntries: Record<string, Entry> = {
     path: "/notes/journal.md",
     content: "- [ ] Record what you learned today.\n",
     initialContent: "- [ ] Record what you learned today.\n",
+    baselinePath: "/notes/journal.md",
     isDirty: false,
     language: "markdown",
     tracked: true,
@@ -252,8 +258,9 @@ interface ResolvedRef {
 function snapshotEntries(entries: Record<string, Entry>) {
   const snapshot: Record<string, string> = {};
   Object.values(entries).forEach((entry) => {
-    if (entry.type === "file" && entry.tracked && !entry.hidden) {
-      snapshot[entry.path] = entry.content;
+    if (entry.type === "file" && entry.tracked && !entry.deleted) {
+      const key = entry.baselinePath ?? entry.path;
+      snapshot[key] = entry.content;
     }
   });
   return snapshot;
@@ -268,11 +275,15 @@ function applySnapshotToEntries(
   let nextActive = activeFileId;
   Object.values(entries).forEach((entry) => {
     if (entry.type !== "file" || !entry.tracked) return;
-    const value = snapshot[entry.path];
+    const headPath = entry.baselinePath ?? entry.path;
+    const value = snapshot[headPath];
     if (value != null) {
       nextEntries[entry.id] = {
         ...entry,
+        path: headPath,
+        baselinePath: headPath,
         hidden: false,
+        deleted: false,
         content: value,
         initialContent: value,
         isDirty: false,
@@ -281,6 +292,7 @@ function applySnapshotToEntries(
       nextEntries[entry.id] = {
         ...entry,
         hidden: true,
+        deleted: true,
         content: "",
         initialContent: "",
         isDirty: false,
@@ -315,28 +327,37 @@ function resolveRef(state: PlaygroundState, ref?: string): ResolvedRef | null {
 
 function recomputePaths(entries: Record<string, Entry>, startId: string) {
   const nextEntries = { ...entries };
-  const update = (id: string) => {
-    const entry = nextEntries[id];
-    if (!entry) return;
-    const parentId = entry.parentId;
-    let basePath = "/";
-    if (parentId != null) {
-      const parent = nextEntries[parentId];
+  const updatePath = (entryId: string) => {
+    const node = nextEntries[entryId];
+    if (!node) return;
+    let newPath = "/";
+    if (node.parentId != null) {
+      const parent = nextEntries[node.parentId];
       const parentPath = parent?.path ?? "/";
-      basePath = parentPath === "/" ? `/${entry.name}` : `${parentPath}/${entry.name}`;
+      newPath = parentPath === "/" ? `/${node.name}` : `${parentPath}/${node.name}`;
     }
-    if (parentId == null) {
-      basePath = "/";
+    if (node.parentId == null) {
+      newPath = "/";
     }
-    if (entry.type === "file") {
-      nextEntries[id] = { ...entry, path: basePath };
+    if (node.type === "file") {
+      nextEntries[entryId] = { ...node, path: newPath };
     } else {
-      nextEntries[id] = { ...entry, path: basePath, children: [...entry.children] };
-      entry.children.forEach((childId) => update(childId));
+      nextEntries[entryId] = { ...node, path: newPath, children: [...node.children] };
+      node.children.forEach(updatePath);
     }
   };
-  update(startId);
+  updatePath(startId);
   return nextEntries;
+}
+
+function cleanupDanglingChildren(entries: Record<string, Entry>, entryId: string) {
+  const node = entries[entryId];
+  if (!node || node.type !== "directory") return;
+  const nextChildren = node.children.filter((childId) => entries[childId]);
+  if (nextChildren.length !== node.children.length) {
+    entries[entryId] = { ...node, children: nextChildren };
+  }
+  nextChildren.forEach((childId) => cleanupDanglingChildren(entries, childId));
 }
 
 export const usePlaygroundStore = create<PlaygroundState>((set, get) => ({
@@ -411,6 +432,7 @@ export const usePlaygroundStore = create<PlaygroundState>((set, get) => ({
           parentId,
           path,
           children: [],
+          hidden: false,
         };
       } else {
         entries[id] = {
@@ -421,9 +443,11 @@ export const usePlaygroundStore = create<PlaygroundState>((set, get) => ({
           path,
           content: "",
           initialContent: "",
+          baselinePath: path,
           isDirty: true,
           tracked: false,
           hidden: false,
+          deleted: false,
         };
       }
       entries[parentId] = { ...parent, children: [...parent.children, id] };
@@ -441,29 +465,48 @@ export const usePlaygroundStore = create<PlaygroundState>((set, get) => ({
     set((state) => {
       const entry = state.entries[id];
       if (!entry || entry.parentId == null) return state;
-      const entries = { ...state.entries };
-      const removeRecursive = (entryId: string) => {
+      const entries: Record<string, Entry> = { ...state.entries };
+      const now = Date.now();
+
+      const markDeleted = (entryId: string) => {
         const node = entries[entryId];
         if (!node) return;
         if (node.type === "directory") {
-          node.children.forEach(removeRecursive);
+          node.children.forEach((childId) => markDeleted(childId));
+          const remainingChildren = node.children.filter((childId) => entries[childId]);
+          entries[entryId] = { ...node, hidden: true, children: remainingChildren };
+          return;
         }
-        delete entries[entryId];
+        if (node.tracked) {
+          entries[entryId] = {
+            ...node,
+            hidden: true,
+            deleted: true,
+            isDirty: true,
+            content: "",
+            lastEdited: now,
+          };
+        } else {
+          delete entries[entryId];
+        }
       };
-      removeRecursive(id);
-      const parent = state.entries[entry.parentId];
+
+      markDeleted(id);
+
+      const parent = entries[entry.parentId];
       if (parent && parent.type === "directory") {
         entries[parent.id] = {
           ...parent,
-          children: parent.children.filter((child) => child !== id),
+          children: parent.children.filter((childId) => entries[childId]),
         };
       }
+
       const timeline = appendEvent(state.timeline, {
         id: createId(),
         kind: "command",
         label: `Deleted ${entry.name}`,
         detail: `Path ${entry.path}`,
-        timestamp: Date.now(),
+        timestamp: now,
       });
       const activeFileId = state.activeFileId === id ? null : state.activeFileId;
       return { entries, timeline, activeFileId };
@@ -510,11 +553,7 @@ export const usePlaygroundStore = create<PlaygroundState>((set, get) => ({
         .map((child) => state.entries[child])
         .find((child) => child && child.name === segment)?.id;
       if (!childId) return null;
-      const child = state.entries[childId];
-      if (child?.type === "file" && child.hidden) {
-        return null;
-      }
-      current = child;
+      current = state.entries[childId];
     }
     return current ?? null;
   },
@@ -525,11 +564,12 @@ export const usePlaygroundStore = create<PlaygroundState>((set, get) => ({
     ids.forEach((id) => {
       const entry = state.entries[id];
       if (!entry || entry.type !== "file") return;
-      if (entry.hidden) return;
-      if (!entry.isDirty && entry.tracked) return;
+      if (entry.hidden && !entry.deleted) return;
+      if (!entry.deleted && !entry.isDirty && entry.tracked) return;
       if (staged.has(id)) return;
       staged.add(id);
-      stagedPaths.push(entry.path);
+      const displayPath = entry.deleted ? entry.baselinePath ?? entry.path : entry.path;
+      stagedPaths.push(displayPath);
     });
     if (stagedPaths.length === 0) {
       return [];
@@ -545,7 +585,12 @@ export const usePlaygroundStore = create<PlaygroundState>((set, get) => ({
   stageAllDirty: () => {
     const state = get();
     const dirtyIds = Object.values(state.entries)
-      .filter((entry): entry is FileEntry => entry.type === "file" && !entry.hidden && (entry.isDirty || !entry.tracked))
+      .filter(
+        (entry): entry is FileEntry =>
+          entry.type === "file" &&
+          (entry.deleted || !entry.hidden) &&
+          (entry.isDirty || entry.deleted || !entry.tracked)
+      )
       .map((entry) => entry.id);
     return state.stageEntryIds(dirtyIds);
   },
@@ -558,7 +603,8 @@ export const usePlaygroundStore = create<PlaygroundState>((set, get) => ({
       staged.delete(id);
       const entry = state.entries[id];
       if (entry && entry.type === "file") {
-        removed.push(entry.path);
+        const displayPath = entry.deleted ? entry.baselinePath ?? entry.path : entry.path;
+        removed.push(displayPath);
       }
     });
     if (removed.length === 0) {
@@ -586,10 +632,20 @@ export const usePlaygroundStore = create<PlaygroundState>((set, get) => ({
     const parent = state.entries[entry.parentId];
     if (!parent || parent.type !== "directory") return false;
     const entries: Record<string, Entry> = { ...state.entries };
+    const markDirty = (entryId: string) => {
+      const node = entries[entryId];
+      if (!node) return;
+      if (node.type === "file") {
+        entries[entryId] = { ...node, isDirty: true };
+      } else {
+        node.children.forEach(markDirty);
+      }
+    };
     if (entry.type === "file") {
-      entries[id] = { ...entry, name: nextName };
+      entries[id] = { ...entry, name: nextName, isDirty: true };
     } else {
       entries[id] = { ...entry, name: nextName, children: [...entry.children] };
+      entry.children.forEach(markDirty);
     }
     const updatedEntries = recomputePaths(entries, id);
     const timeline = appendEvent(state.timeline, {
@@ -704,6 +760,13 @@ export const usePlaygroundStore = create<PlaygroundState>((set, get) => ({
     const stagedSet = new Set(state.stagedFileIds);
     Object.values(entries).forEach((entry) => {
       if (entry.type !== "file" || !stagedSet.has(entry.id)) return;
+      if (entry.deleted) {
+        delete baseSnapshot[entry.baselinePath ?? entry.path];
+        return;
+      }
+      if (entry.baselinePath && entry.baselinePath !== entry.path) {
+        delete baseSnapshot[entry.baselinePath];
+      }
       baseSnapshot[entry.path] = entry.content;
     });
     const commitId = generateCommitId();
@@ -717,14 +780,30 @@ export const usePlaygroundStore = create<PlaygroundState>((set, get) => ({
     stagedSet.forEach((id) => {
       const entry = entries[id];
       if (!entry || entry.type !== "file") return;
+      if (entry.deleted) {
+        if (entry.parentId) {
+          const parent = entries[entry.parentId];
+          if (parent && parent.type === "directory") {
+            entries[entry.parentId] = {
+              ...parent,
+              children: parent.children.filter((child) => child !== id),
+            };
+          }
+        }
+        delete entries[id];
+        return;
+      }
       entries[id] = {
         ...entry,
         tracked: true,
         hidden: false,
+        deleted: false,
+        baselinePath: entry.path,
         initialContent: entry.content,
         isDirty: false,
       };
     });
+    cleanupDanglingChildren(entries, state.rootId);
     const branches = {
       ...state.branches,
       [state.currentBranch]: commitId,
