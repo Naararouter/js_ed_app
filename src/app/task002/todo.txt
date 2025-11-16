@@ -1,0 +1,45 @@
+technical stack:
+- xterm.js
+- isomorphic-git (+ lightning-fs)
+- file tree: we will implement our own simple component with shadcn or magicuidesign
+- monaco editor (+ diff)
+- graph visualization: start with react-flow
+
+high-level layout:
+1. left column: tasks/hints stack (collapsible) + action timeline
+2. center column: resizable vertical split for custom file tree and monaco editor/diff
+3. bottom dock: xterm.js terminal pinned across width, supporting command history
+4. right column: react-flow git graph atop changes inspector (selected commit, file history)
+
+state model:
+- zustand store holds fs tree, active file, dirty state, open editors, tasks
+- file ops routed through a FS adapter (lightning-fs) so both monaco + git share the same data
+- command bus processes terminal input, updates store, emits events for timeline/log
+- react-query (or SWR) optional later if we sync with backend; for MVP everything client-only
+
+xterm.js plan:
+- wrap in a client component with command prompt, simple parser, autocomplete skeleton
+- support core commands: ls, cat, pwd, touch, rm, mkdir, git status/add/commit/branch/log
+- route git commands into isomorphic-git using the shared FS adapter
+- log each command execution (input, output, success) for the timeline panel
+
+file tree component:
+- shadcn/ui accordion + context menu for create/rename/delete files and folders
+- derive tree nodes from FS adapter, subscribe to store events so tree updates live
+- drag-and-drop optional later; MVP = click-to-open and inline rename
+
+monaco editor:
+- single editor with tabbed header (open files); diff mode triggered from history panel
+- language detection via filename; highlight active git status (dirty/clean) in tab badge
+- saves push content to FS adapter and emits change events for git status + timeline
+
+git graph (react-flow):
+- preprocess commits into layered DAG via dagre/elk; nodes = commits, edges = parent relations
+- custom node component showing SHA, message, branch badges, HEAD pointer
+- selecting a node highlights branch path + loads commit details below (files changed, diff)
+- timeline aligns with graph selection so user can see both structural + chronological contexts
+
+educational layer:
+- task list (markdown) with checkboxes; hints unlocked sequentially
+- timeline log merges commands, file edits, hints viewed, graph selections
+- future: onboarding tour, achievements, scoring

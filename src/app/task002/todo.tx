@@ -1,6 +1,0 @@
-technical stack:
-- xterm.js
-- isomorphic-git
-- file tree: we will implement our own simple component with shadcn or magicuidesign
-- monaco editor (+ diff)
-- graph visualization: start with react-flow.
